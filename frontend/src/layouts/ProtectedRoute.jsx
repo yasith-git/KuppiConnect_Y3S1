@@ -1,20 +1,19 @@
 import { Navigate } from 'react-router-dom';
+import { useAuth } from '../features/auth/AuthContext';
 
 /**
- * Protects a route by checking localStorage for a logged-in user
- * with the required role. Redirects to /login if not authenticated
- * or to / if the role doesn't match.
+ * Restricts access based on authentication and role.
+ * - Not logged in → /login
+ * - Wrong role → redirected to their own home
  */
 function ProtectedRoute({ role, children }) {
-  const stored = localStorage.getItem('kuppi_user');
-  const user = stored ? JSON.parse(stored) : null;
+  const { user } = useAuth();
 
   if (!user) {
     return <Navigate to="/login" replace />;
   }
 
   if (role && user.role !== role) {
-    // Wrong role — send to their own home
     return <Navigate to={user.role === 'conductor' ? '/conductor' : '/student'} replace />;
   }
 
