@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useAuth } from '../../auth/AuthContext';
 import { dummyUsers } from '../../../data/dummyData';
 
@@ -9,10 +9,29 @@ const SUBJECTS_ALL = [
 
 const LS_KEY = 'kuppi_profile';
 
-function loadProfile(userId) {
+function loadProfile(userId, defaults = {}) {
   try {
     const s = localStorage.getItem(`${LS_KEY}_${userId}`);
-    if (s) return JSON.parse(s);
+    if (s) {
+      const parsed = JSON.parse(s);
+      // Always merge with defaults so missing/null fields never crash the UI
+      return {
+        ...defaults,
+        ...parsed,
+        name:          parsed.name     ?? defaults.name     ?? '',
+        bio:           parsed.bio      ?? defaults.bio      ?? '',
+        title:         parsed.title    ?? defaults.title    ?? '',
+        university:    parsed.university ?? defaults.university ?? '',
+        email:         parsed.email    ?? defaults.email    ?? '',
+        phone:         parsed.phone    ?? defaults.phone    ?? '',
+        photo:         parsed.photo    ?? defaults.photo    ?? null,
+        rating:        parsed.rating   ?? defaults.rating   ?? null,
+        totalStudents: parsed.totalStudents ?? defaults.totalStudents ?? 0,
+        classesHeld:   parsed.classesHeld   ?? defaults.classesHeld   ?? 0,
+        subjects:      Array.isArray(parsed.subjects) ? parsed.subjects
+                         : Array.isArray(defaults.subjects) ? defaults.subjects : [],
+      };
+    }
   } catch {}
   return null;
 }
@@ -53,19 +72,21 @@ export default function Profile() {
 
   const baseUser = dummyUsers.find(u => u.id === user?.id) ?? {};
 
-  const initialProfile = loadProfile(user?.id) ?? {
-    name:         baseUser.name ?? user?.name ?? '',
-    email:        baseUser.email ?? user?.email ?? '',
-    phone:        baseUser.phone ?? '',
-    title:        baseUser.title ?? '',
-    university:   baseUser.university ?? '',
-    bio:          baseUser.bio ?? '',
-    subjects:     baseUser.subjects ?? [],
-    rating:       baseUser.rating ?? null,
-    totalStudents:baseUser.totalStudents ?? 0,
-    classesHeld:  baseUser.classesHeld ?? 0,
-    photo:        baseUser.photo ?? null,
+  const defaults = {
+    name:          baseUser.name          ?? user?.name  ?? '',
+    email:         baseUser.email         ?? user?.email ?? '',
+    phone:         baseUser.phone         ?? '',
+    title:         baseUser.title         ?? '',
+    university:    baseUser.university    ?? '',
+    bio:           baseUser.bio           ?? '',
+    subjects:      Array.isArray(baseUser.subjects) ? baseUser.subjects : [],
+    rating:        baseUser.rating        ?? null,
+    totalStudents: baseUser.totalStudents ?? 0,
+    classesHeld:   baseUser.classesHeld   ?? 0,
+    photo:         baseUser.photo         ?? null,
   };
+
+  const initialProfile = loadProfile(user?.id, defaults) ?? defaults;
 
   const [form, setForm] = useState(initialProfile);
   const [errors, setErrors] = useState({});
@@ -157,7 +178,7 @@ export default function Profile() {
               <div className="w-20 h-20 rounded-full shadow-sm mb-3 overflow-hidden flex items-center justify-center bg-gradient-to-br from-sky-400 to-primary">
                 {form.photo
                   ? <img src={form.photo} alt="Profile" className="w-full h-full object-cover" />
-                  : <span className="text-white font-extrabold text-3xl">{form.name.charAt(0).toUpperCase()}</span>
+                  : <span className="text-white font-extrabold text-3xl">{(form.name || 'K').charAt(0).toUpperCase()}</span>
                 }
               </div>
               <h2 className="font-bold text-ink text-base leading-tight">{form.name || '—'}</h2>
@@ -184,9 +205,9 @@ export default function Profile() {
             )}
 
             {/* Subjects */}
-            {form.subjects.length > 0 && (
+            {(form.subjects ?? []).length > 0 && (
               <div className="flex flex-wrap gap-1.5 justify-center mb-4">
-                {form.subjects.map(s => (
+                {(form.subjects ?? []).map(s => (
                   <span key={s} className="bg-sky-50 text-primary text-xs font-semibold px-2.5 py-1 rounded-full border border-sky-200">{s}</span>
                 ))}
               </div>
@@ -236,9 +257,9 @@ export default function Profile() {
                 </div>
                 <div className="p-6">
                   <h3 className="font-bold text-ink text-sm uppercase tracking-wide mb-3">Teaching Subjects</h3>
-                  {form.subjects.length > 0 ? (
+                  {(form.subjects ?? []).length > 0 ? (
                     <div className="flex flex-wrap gap-2">
-                      {form.subjects.map(s => (
+                      {(form.subjects ?? []).map(s => (
                         <span key={s} className="bg-sky-50 text-primary text-sm font-semibold px-3 py-1.5 rounded-full border border-sky-200">{s}</span>
                       ))}
                     </div>
@@ -256,7 +277,7 @@ export default function Profile() {
                     <div className="w-20 h-20 rounded-full overflow-hidden flex items-center justify-center bg-gradient-to-br from-sky-400 to-primary shrink-0 shadow-sm">
                       {form.photo
                         ? <img src={form.photo} alt="Profile preview" className="w-full h-full object-cover" />
-                        : <span className="text-white font-extrabold text-2xl">{form.name.charAt(0).toUpperCase() || 'K'}</span>
+                        : <span className="text-white font-extrabold text-2xl">{(form.name || 'K').charAt(0).toUpperCase()}</span>
                       }
                     </div>
                     <div>
@@ -339,7 +360,7 @@ export default function Profile() {
                 <div className="p-6 border-b border-slate-100">
                   <h3 className="font-bold text-ink text-sm uppercase tracking-wide mb-4">Teaching Subjects</h3>
                   <div className="flex flex-wrap gap-2 mb-3">
-                    {form.subjects.map(s => (
+                    {(form.subjects ?? []).map(s => (
                       <span key={s}
                         className="flex items-center gap-1.5 bg-sky-50 text-primary text-sm font-semibold px-3 py-1.5 rounded-full border border-sky-200">
                         {s}
@@ -390,7 +411,7 @@ export default function Profile() {
                     Save Profile
                   </button>
                   <button type="button"
-                    onClick={() => { setEditing(false); setErrors({}); setForm(loadProfile(user?.id) ?? initialProfile); }}
+                    onClick={() => { setEditing(false); setErrors({}); setForm(loadProfile(user?.id, defaults) ?? defaults); }}
                     className="px-8 py-3.5 border border-slate-200 text-sub rounded-xl text-sm font-semibold hover:bg-slate-50 transition-all">
                     Cancel
                   </button>
