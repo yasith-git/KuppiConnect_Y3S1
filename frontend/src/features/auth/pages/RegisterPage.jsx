@@ -47,13 +47,15 @@ const PANEL = {
 
 function RegisterPage() {
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const { register } = useAuth();
 
   const [form, setForm]         = useState({ name: '', email: '', phone: '', password: '', confirm: '', role: 'student' });
   const [errors, setErrors]     = useState({});
   const [touched, setTouched]   = useState({});
   const [showPw, setShowPw]     = useState(false);
   const [showCf, setShowCf]     = useState(false);
+  const [serverError, setServerError] = useState('');
+  const [loading, setLoading]   = useState(false);
 
   function validateForm(f) {
     const e = {};
@@ -84,13 +86,28 @@ function RegisterPage() {
     setErrors(prev => ({ ...prev, [name]: errs[name] || '' }));
   }
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
     setTouched({ name: true, email: true, phone: true, password: true, confirm: true });
     const errs = validateForm(form);
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
-    login({ id: Date.now(), name: form.name.trim(), email: form.email.trim(), role: form.role });
-    navigate(form.role === 'conductor' ? '/conductor' : '/student');
+
+    setLoading(true);
+    setServerError('');
+    try {
+      const user = await register({
+        name: form.name.trim(),
+        email: form.email.trim(),
+        phone: form.phone.trim(),
+        password: form.password,
+        role: form.role,
+      });
+      navigate(user.role === 'conductor' ? '/conductor' : '/student');
+    } catch (err) {
+      setServerError(err.message || 'Registration failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   }
 
   const panel    = PANEL[form.role];
@@ -175,6 +192,14 @@ function RegisterPage() {
 
           <form onSubmit={handleSubmit} className="space-y-4" noValidate>
 
+            {/* Server error */}
+            {serverError && (
+              <div className="flex items-start gap-2.5 bg-red-50 border border-err/30 text-err rounded-xl px-4 py-3 text-sm">
+                <span className="mt-0.5 shrink-0">⚠</span>
+                <span>{serverError}</span>
+              </div>
+            )}
+
             {/* Full Name */}
             <div>
               <label className="block text-sm font-semibold text-ink mb-1.5">Full Name</label>
@@ -249,11 +274,12 @@ function RegisterPage() {
               {errors.confirm && <p className="flex items-center gap-1 text-err text-xs mt-1.5"><span>⚠</span> {errors.confirm}</p>}
             </div>
 
-            <button type="submit"
+            <button type="submit" disabled={loading}
               className="w-full bg-primary hover:bg-primary-dark text-white py-3.5 rounded-xl font-bold text-sm mt-2
                          transition-all shadow-[0_4px_14px_rgba(14,165,233,0.3)]
-                         hover:shadow-[0_6px_22px_rgba(14,165,233,0.45)] hover:-translate-y-0.5 active:translate-y-0">
-              Create Account →
+                         hover:shadow-[0_6px_22px_rgba(14,165,233,0.45)] hover:-translate-y-0.5 active:translate-y-0
+                         disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:translate-y-0">
+              {loading ? 'Creating account…' : 'Create Account →'}
             </button>
           </form>
 

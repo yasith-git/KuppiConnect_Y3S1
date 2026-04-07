@@ -1,3 +1,14 @@
+/**
+ * StudentRegistrationPage — Member 3 (Registration feature)
+ *
+ * Browse and filter all available classes.
+ * Clicking a card (or the Register button) navigates to /class/:id
+ * where the full registration modal lives.
+ *
+ * Rules enforced:
+ *  - A student who is already enrolled sees \u2713 Enrolled badge instead of Register button.
+ *  - Meeting link URLs are NEVER shown here (sent via email only).
+ */
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
@@ -11,9 +22,27 @@ const SUBJECTS = [
 
 const today = new Date().toISOString().split('T')[0];
 
+/**
+ * Returns a display-safe location string.
+ * Online classes show \"Online\" — never the raw meeting URL.
+ * Physical classes show the venue text.
+ */
+function displayLocation(cls) {
+  if (cls.classType === 'physical') return cls.location || '';
+  if (cls.classType === 'online')   return 'Online';
+  // Legacy fallback: if stored value looks like a URL, mask it
+  const val = cls.location || cls.meetingLink || '';
+  if (val.startsWith('http')) return 'Online';
+  return val;
+}
+
 export default function StudentRegistrationPage() {
   const { classes } = useClasses();
-  const { isEnrolled } = useEnrollments();
+  /*
+   * isEnrolledByEmail lets us show ✓ Enrolled even when the student changes
+   * accounts but uses the same email address.
+   */
+  const { isEnrolled, isEnrolledByEmail } = useEnrollments();
   const { user } = useAuth();
 
   const [search, setSearch]       = useState('');
@@ -94,9 +123,11 @@ export default function StudentRegistrationPage() {
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {filtered.map(cls => {
             const isFull  = cls.enrolled >= cls.seats;
-            const isReg   = isEnrolled(cls.id, user?.id);
+            // Check enrollment by both ID and email for a reliable \u2713 Enrolled state
+            const isReg   = isEnrolled(cls.id, user?.id) || isEnrolledByEmail(cls.id, user?.email);
             const isPast  = cls.date < today;
             const pct     = Math.min(100, (cls.enrolled / cls.seats) * 100);
+            const location = displayLocation(cls);  // safe — never exposes raw URLs
 
             return (
               <div key={cls.id} className={`bg-white border rounded-2xl shadow-sm hover:shadow-md transition-all flex flex-col ${
@@ -119,7 +150,8 @@ export default function StudentRegistrationPage() {
                   <div className="space-y-1 text-xs text-sub mb-4">
                     <p>📅 {cls.date} · {cls.time}</p>
                     {cls.duration && <p>⏱ {cls.duration}</p>}
-                    {(cls.location || cls.meetingLink) && <p className="truncate">📍 {cls.location || cls.meetingLink}</p>}
+                    {/* Show location text only — raw meeting URLs are never displayed */}
+                    {location && <p>📍 {location}</p>}
                   </div>
                   <div>
                     <div className="w-full bg-slate-100 rounded-full h-1.5">

@@ -6,6 +6,7 @@ import { AuthProvider } from './features/auth/AuthContext.jsx'
 import { ClassesProvider } from './contexts/ClassesContext.jsx'
 import { AnnouncementsProvider } from './contexts/AnnouncementsContext.jsx'
 import { EnrollmentsProvider } from './contexts/EnrollmentsContext.jsx'
+import { ClassRequestProvider } from './contexts/ClassRequestContext.jsx'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
@@ -13,7 +14,9 @@ createRoot(document.getElementById('root')).render(
       <ClassesProvider>
         <AnnouncementsProvider>
           <EnrollmentsProvider>
-            <App />
+            <ClassRequestProvider>
+              <App />
+            </ClassRequestProvider>
           </EnrollmentsProvider>
         </AnnouncementsProvider>
       </ClassesProvider>

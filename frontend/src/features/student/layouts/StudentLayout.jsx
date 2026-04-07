@@ -3,11 +3,12 @@ import { Outlet, NavLink, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 
 const NAV = [
-  { to: '/student',           label: 'Dashboard',       icon: '🏠', end: true },
-  { to: '/student/classes',   label: 'Browse Classes',  icon: '🔍' },
-  { to: '/student/myclasses', label: 'My Classes',      icon: '📚' },
-  { to: '/student/content',   label: 'Notes & Content', icon: '📄' },
-  { to: '/student/profile',   label: 'My Profile',      icon: '👤' },
+  { to: '/student',            label: 'Dashboard',       icon: '🏠', end: true },
+  { to: '/student/classes',    label: 'Browse Classes',  icon: '🔍' },
+  { to: '/student/myclasses',  label: 'My Classes',      icon: '📚' },
+  { to: '/student/requests',   label: 'My Requests',     icon: '💡' },
+  { to: '/student/content',    label: 'Notes & Content', icon: '📄' },
+  { to: '/student/profile',    label: 'My Profile',      icon: '👤' },
 ];
 
 export default function StudentLayout() {

@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
-import { dummyUsers } from '../../../data/dummyData';
 
 /* ── Eye icon SVG ── */
 function EyeIcon({ open }) {
@@ -42,6 +41,7 @@ function LoginPage() {
   const [serverError, setServerError] = useState('');
   const [touched, setTouched]       = useState({});
   const [showPw, setShowPw]         = useState(false);
+  const [loading, setLoading]       = useState(false);
 
   function validateForm(f) {
     const e = {};
@@ -69,30 +69,23 @@ function LoginPage() {
     setErrors(prev => ({ ...prev, [name]: errs[name] || '' }));
   }
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
     setTouched({ email: true, password: true });
     const errs = validateForm(form);
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
 
-    const user = dummyUsers.find(u => u.email === form.email && u.password === form.password);
-    if (!user) { setServerError('Invalid email or password.'); return; }
-    if (user.role !== form.role) {
-      setServerError(`This account belongs to the "${user.role}" role. Please switch roles and try again.`);
-      return;
-    }
-    login({ id: user.id, name: user.name, email: user.email, role: user.role });
-    navigate(user.role === 'conductor' ? '/' : '/student');
-  }
-
-  function fillDemo(role) {
-    const creds = role === 'student'
-      ? { email: 'alice@student.com', password: 'student123' }
-      : { email: 'kamal@conductor.com', password: 'conductor123' };
-    setForm({ ...creds, role });
-    setErrors({});
+    setLoading(true);
     setServerError('');
-    setTouched({});
+    try {
+      // Send role to backend — backend validates and returns 403 if wrong role
+      const user = await login({ email: form.email, password: form.password, role: form.role });
+      navigate(user.role === 'conductor' ? '/conductor' : '/student');
+    } catch (err) {
+      setServerError(err.message || 'Invalid email or password.');
+    } finally {
+      setLoading(false);
+    }
   }
 
   const panel = PANEL[form.role];
@@ -141,23 +134,7 @@ function LoginPage() {
           </ul>
         </div>
 
-        {/* Clickable demo access box */}
-        <div className="relative z-10 bg-white rounded-2xl border border-sky-200 p-4 shadow-sm">
-          <p className="text-[10px] font-bold text-ink uppercase tracking-widest mb-3">Quick Demo Access</p>
-          <div className="space-y-2">
-            {[
-              { role: 'student',   label: '🎓 Student demo' },
-              { role: 'conductor', label: '🎤 Conductor demo' },
-            ].map(({ role, label }) => (
-              <button key={role} onClick={() => fillDemo(role)}
-                className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs border border-slate-100
-                           hover:border-primary/30 hover:bg-sky-50 transition-all group">
-                <span className="text-sub">{label}</span>
-                <span className="text-primary font-bold opacity-0 group-hover:opacity-100 transition-opacity text-[11px]">Fill →</span>
-              </button>
-            ))}
-          </div>
-        </div>
+
       </aside>
 
       {/* ── RIGHT: 60% white form panel ── */}
@@ -230,11 +207,12 @@ function LoginPage() {
               )}
             </div>
 
-            <button type="submit"
+            <button type="submit" disabled={loading}
               className="w-full bg-primary hover:bg-primary-dark text-white py-3.5 rounded-xl font-bold text-sm
                          transition-all shadow-[0_4px_14px_rgba(14,165,233,0.3)]
-                         hover:shadow-[0_6px_22px_rgba(14,165,233,0.45)] hover:-translate-y-0.5 active:translate-y-0">
-              Sign in as {form.role === 'conductor' ? 'Conductor' : 'Student'} →
+                         hover:shadow-[0_6px_22px_rgba(14,165,233,0.45)] hover:-translate-y-0.5 active:translate-y-0
+                         disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:translate-y-0">
+              {loading ? 'Signing in…' : `Sign in as ${form.role === 'conductor' ? 'Conductor' : 'Student'} →`}
             </button>
           </form>
 

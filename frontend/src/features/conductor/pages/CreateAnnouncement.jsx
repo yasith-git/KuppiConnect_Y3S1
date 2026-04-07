@@ -3,11 +3,18 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { useAnnouncements } from '../../../contexts/AnnouncementsContext';
 
-const today = new Date().toISOString().split('T')[0];
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
 
 function getStatus(ann) {
-  if (ann.endDate < today) return 'expired';
-  if (ann.startDate > today) return 'pending';
+  const now = new Date();
+  if (new Date(ann.endDate) < now) return 'expired';
+  if (new Date(ann.startDate) > now) return 'pending';
   return 'active';
 }
 
@@ -17,7 +24,7 @@ const STATUS_STYLES = {
   expired: { label: '✕ Expired', cls: 'bg-red-50 text-err border-red-100' },
 };
 
-const EMPTY = { title: '', description: '', startDate: '', endDate: '', imagePreview: null };
+const EMPTY = { title: '', description: '', startDate: '', endDate: '', displayDuration: 1, imagePreview: null, imageFile: null };
 
 function validate(form) {
   const e = {};
@@ -36,14 +43,16 @@ function FieldError({ msg }) {
 
 export default function CreateAnnouncement() {
   const { user } = useAuth();
-  const { announcements, addAnnouncement, updateAnnouncement, deleteAnnouncement } = useAnnouncements();
+  const { myAnnouncements, addAnnouncement, updateAnnouncement, deleteAnnouncement, loading } = useAnnouncements();
 
-  const myAnns = announcements.filter(a => a.conductorId === user?.id);
+  const myAnns = myAnnouncements;
 
   const [form, setForm] = useState(EMPTY);
   const [errors, setErrors] = useState({});
   const [editId, setEditId] = useState(null);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [apiError, setApiError] = useState('');
   const fileRef = useRef();
 
   function inputCls(name) {
@@ -62,43 +71,55 @@ export default function CreateAnnouncement() {
   function handleImageChange(e) {
     const file = e.target.files[0];
     if (!file) return;
+    setForm(f => ({ ...f, imageFile: file }));
     const reader = new FileReader();
-    reader.onload = ev => patch('imagePreview', ev.target.result);
+    reader.onload = ev => setForm(f => ({ ...f, imagePreview: ev.target.result }));
     reader.readAsDataURL(file);
     e.target.value = '';
   }
 
   function removeImage() {
-    patch('imagePreview', null);
+    setForm(f => ({ ...f, imagePreview: null, imageFile: null }));
     if (fileRef.current) fileRef.current.value = '';
   }
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
     const errs = validate(form);
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
 
-    if (editId !== null) {
-      updateAnnouncement(editId, form);
-      setEditId(null);
-    } else {
-      addAnnouncement(form, user?.id);
+    setSaving(true);
+    setApiError('');
+    try {
+      if (editId !== null) {
+        await updateAnnouncement(editId, form);
+        setEditId(null);
+      } else {
+        await addAnnouncement(form);
+      }
+      setForm(EMPTY);
+      setErrors({});
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (err) {
+      setApiError(err.message || 'Failed to save announcement. Please try again.');
+    } finally {
+      setSaving(false);
     }
-
-    setForm(EMPTY);
-    setErrors({});
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
   }
 
   function handleEdit(ann) {
     setEditId(ann.id);
     setForm({
-      title:        ann.title ?? '',
-      description:  ann.description ?? ann.body ?? '',
-      startDate:    ann.startDate ?? '',
-      endDate:      ann.endDate ?? '',
-      imagePreview: ann.image ?? null,
+      title:           ann.title ?? '',
+      description:     ann.description ?? ann.body ?? '',
+      // slice to 16 chars converts ISO "2026-04-07T14:30:00.000Z" → "2026-04-07T14:30"
+      // which is the correct format for datetime-local inputs
+      startDate:       ann.startDate ? ann.startDate.slice(0, 16) : '',
+      endDate:         ann.endDate   ? ann.endDate.slice(0, 16)   : '',
+      displayDuration: ann.displayDuration ?? 1,
+      imagePreview:    ann.image ?? null,
+      imageFile:       null,
     });
     setErrors({});
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -150,6 +171,12 @@ export default function CreateAnnouncement() {
               </div>
             )}
 
+            {apiError && (
+              <div className="bg-red-50 border border-red-200 text-err rounded-xl px-4 py-3 mb-5 text-sm flex items-center gap-2">
+                ⚠ {apiError}
+              </div>
+            )}
+
             <form onSubmit={handleSubmit} className="space-y-4">
 
               {/* Image upload */}
@@ -197,18 +224,18 @@ export default function CreateAnnouncement() {
                 <FieldError msg={errors.description} />
               </div>
 
-              {/* Dates */}
+              {/* Dates — datetime-local lets you set exact time for quick testing */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-semibold text-ink mb-1.5">Start Date <span className="text-err">*</span></label>
-                  <input type="date" value={form.startDate}
+                  <label className="block text-sm font-semibold text-ink mb-1.5">Start Date & Time <span className="text-err">*</span></label>
+                  <input type="datetime-local" value={form.startDate}
                     onChange={e => patch('startDate', e.target.value)}
                     className={inputCls('startDate')} />
                   <FieldError msg={errors.startDate} />
                 </div>
                 <div>
-                  <label className="block text-sm font-semibold text-ink mb-1.5">End Date <span className="text-err">*</span></label>
-                  <input type="date" value={form.endDate}
+                  <label className="block text-sm font-semibold text-ink mb-1.5">End Date & Time <span className="text-err">*</span></label>
+                  <input type="datetime-local" value={form.endDate}
                     min={form.startDate || undefined}
                     onChange={e => patch('endDate', e.target.value)}
                     className={inputCls('endDate')} />
@@ -216,10 +243,21 @@ export default function CreateAnnouncement() {
                 </div>
               </div>
 
+              {/* Slide display duration */}
+              <div>
+                <label className="block text-sm font-semibold text-ink mb-1.5">
+                  Slide Duration
+                  <span className="text-dim font-normal ml-1">(mins per carousel slide, 1–60)</span>
+                </label>
+                <input type="number" min="1" max="60" value={form.displayDuration}
+                  onChange={e => patch('displayDuration', Math.max(1, Math.min(60, Number(e.target.value) || 1)))}
+                  className={inputCls('displayDuration')} />
+              </div>
+
               <div className="flex gap-2 pt-1">
-                <button type="submit"
-                  className="flex-1 bg-primary hover:bg-primary-dark text-white py-3 rounded-xl font-bold text-sm transition-all shadow-sm hover:shadow-[0_4px_14px_rgba(14,165,233,0.35)]">
-                  {editId !== null ? 'Save Changes' : 'Publish Announcement'}
+                <button type="submit" disabled={saving}
+                  className="flex-1 bg-primary hover:bg-primary-dark text-white py-3 rounded-xl font-bold text-sm transition-all shadow-sm hover:shadow-[0_4px_14px_rgba(14,165,233,0.35)] disabled:opacity-60 disabled:cursor-not-allowed">
+                  {saving ? 'Saving…' : editId !== null ? 'Save Changes' : 'Publish Announcement'}
                 </button>
                 {editId !== null && (
                   <button type="button" onClick={handleCancel}
@@ -239,7 +277,11 @@ export default function CreateAnnouncement() {
             <span className="text-xs text-dim bg-slate-100 px-3 py-1.5 rounded-full">{myAnns.length} total</span>
           </div>
 
-          {myAnns.length === 0 ? (
+          {loading && (
+            <div className="text-center py-12 text-sub text-sm">Loading your announcements…</div>
+          )}
+
+          {!loading && myAnns.length === 0 ? (
             <div className="text-center py-16 bg-white rounded-2xl border border-slate-100 shadow-sm">
               <span className="text-5xl block mb-3">📢</span>
               <p className="font-bold text-ink mb-1">No announcements yet</p>
@@ -274,7 +316,8 @@ export default function CreateAnnouncement() {
                           </span>
                         </div>
                         <p className="text-dim text-xs mb-2 line-clamp-2 leading-relaxed">{ann.description ?? ann.body}</p>
-                        <p className="text-[11px] text-dim">📅 {ann.startDate} → {ann.endDate}</p>
+                        <p className="text-[11px] text-dim">📅 {fmtDate(ann.startDate)} → {fmtDate(ann.endDate)}</p>
+                        <p className="text-[11px] text-dim mt-0.5">⏱ Slide: {ann.displayDuration ?? 1} min</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 px-5 pb-4">

@@ -1,15 +1,34 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { useClasses } from '../../../contexts/ClassesContext';
 import { useEnrollments } from '../../../contexts/EnrollmentsContext';
+import { useClassRequests } from '../../../contexts/ClassRequestContext';
 import { dummyUsers } from '../../../data/dummyData';
+import { api } from '../../../services/api';
 import Comments from '../../content/components/Comments';
 import Rating from '../../content/components/Rating';
 import UploadNotes from '../../content/components/UploadNotes';
 import AISummary from '../../content/components/AISummary';
+import ClassAnnouncements from '../../content/components/ClassAnnouncements';
 
-/* ── Icons ── */
+/**
+ * ClassDetails — Public class detail page (used by both guests and logged-in students).
+ *
+ * Lives in features/landing/pages/ (shared, not Member-specific) because it must
+ * be accessible without a login for browsing.
+ *
+ * Registration flow:
+ *  1. Student clicks "Register for this Class"
+ *  2. RegisterModal opens, student confirms name / email / phone
+ *  3. POST /api/registration/enroll is called (Member 3 — registration/ backend)
+ *  4. On success the enrollment is also saved to localStorage for instant UI feedback
+ *  5. alreadyEnrolled flag replaces the register button with a ✓ confirmation
+ *
+ * Duplicate-registration prevention:
+ *  - Backend: unique index on (student, class) + email cross-check
+ *  - Frontend: isEnrolled() + isEnrolledByEmail() from EnrollmentsContext
+ */
 function BackIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -28,6 +47,19 @@ function StarIcon({ filled }) {
   );
 }
 
+/**
+ * Returns a human-readable location string — never exposes raw URLs.
+ * Physical classes show the venue text; online classes show "Online".
+ */
+function displayLocation(cls) {
+  if (cls.classType === 'physical') return cls.location || '—';
+  if (cls.classType === 'online')   return 'Online';
+  // Legacy: if location/meetingLink looks like a URL, replace with "Online"
+  const val = cls.location || cls.meetingLink || '';
+  if (val.startsWith('http')) return 'Online';
+  return val || '—';
+}
+
 function StarRating({ rating }) {
   const full = Math.floor(rating);
   return (
@@ -39,7 +71,7 @@ function StarRating({ rating }) {
 
 /* ── Registration Modal ── */
 function RegisterModal({ cls, user, onClose, onSuccess }) {
-  const { enroll, isEnrolled } = useEnrollments();
+  const { enroll, isEnrolled, isEnrolledByEmail, fetchMyEnrollments, fetchMyClasses } = useEnrollments();
   const { incrementEnrolled }  = useClasses();
 
   // Pre-fill phone from the student's saved profile
@@ -73,17 +105,41 @@ function RegisterModal({ cls, user, onClose, onSuccess }) {
     e.preventDefault();
     const errs = validate();
     if (Object.keys(errs).length) { setErrors(errs); return; }
-    if (isEnrolled(cls.id, user?.id)) {
+
+    // Front-end duplicate guard — checked again here in case alreadyEnrolled
+    // state hasn't refreshed (e.g. two tabs open at the same time)
+    if (isEnrolled(cls.id, user?.id) || isEnrolledByEmail(cls.id, user?.email)) {
       setErrors({ form: 'You are already registered for this class.' });
       return;
     }
+
     setLoading(true);
-    setTimeout(() => {
-      enroll(cls, { id: user?.id, name: form.name.trim(), email: form.email.trim(), phone: form.phone.trim() });
-      incrementEnrolled(cls.id);
-      setLoading(false);
-      onSuccess({ name: form.name.trim(), email: form.email.trim() });
-    }, 500);
+
+    /*
+     * Call the real backend API (Member 3 — registration/ module).
+     * The backend enforces the unique constraint at the DB level and
+     * sends the meeting link / venue details to the student's email.
+     */
+    api.post('/registration/enroll', {
+      classId: cls.id,
+      studentDetails: { phone: form.phone.trim() },
+    })
+      .then(async () => {
+        // Persist locally for immediate UI feedback
+        enroll(cls, { id: user?.id, name: form.name.trim(), email: form.email.trim(), phone: form.phone.trim() });
+        incrementEnrolled(cls.id);
+        // Sync MongoDB IDs so "Leave Class" in MyClasses can call the real API
+        try { await fetchMyEnrollments(user?.id); } catch { /* non-fatal */ }
+        // Refresh split class lists so dashboard count updates immediately
+        fetchMyClasses().catch(() => {});
+        setLoading(false);
+        onSuccess({ name: form.name.trim(), email: form.email.trim() });
+      })
+      .catch(err => {
+        setLoading(false);
+        const msg = err.message || 'Registration failed. Please try again.';
+        setErrors({ form: msg });
+      });
   }
 
   const inputCls = name =>
@@ -204,19 +260,179 @@ KuppiConnect Team`;
   );
 }
 
+/* ── Topic Request Modal ── */
+function RequestTopicModal({ cls, user, onClose }) {
+  const { submitRequest } = useClassRequests();
+  const SUBJECTS = [
+    'Mathematics', 'Physics', 'Chemistry', 'Biology',
+    'Computer Science', 'English', 'Economics', 'Statistics', 'Other',
+  ];
+  const [form, setForm]     = useState({ subject: cls.subject || '', topic: '', description: '' });
+  const [errors, setErrors] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [done, setDone]     = useState(false);
+
+  function patch(k, v) { setForm(f => ({ ...f, [k]: v })); setErrors(e => ({ ...e, [k]: '' })); }
+
+  function validate() {
+    const e = {};
+    if (!form.subject) e.subject = 'Please select a subject.';
+    if (!form.topic.trim()) e.topic = 'Please describe the topic.';
+    return e;
+  }
+
+  async function handleSubmit(ev) {
+    ev.preventDefault();
+    const errs = validate();
+    if (Object.keys(errs).length) { setErrors(errs); return; }
+    setSaving(true);
+    try {
+      const conductorId = cls.conductorData?._id || cls.conductorId;
+      await submitRequest({
+        conductorId,
+        relatedClassId: cls.id,
+        subject:     form.subject,
+        topic:       form.topic.trim(),
+        description: form.description.trim(),
+      });
+      setDone(true);
+    } catch (err) {
+      setErrors({ form: err.message || 'Failed to send request.' });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputCls = name =>
+    `w-full px-4 py-3 text-sm border rounded-xl focus:outline-none transition-all ${
+      errors[name]
+        ? 'border-err bg-red-50 focus:ring-2 focus:ring-err/20'
+        : 'border-slate-200 focus:border-primary focus:ring-2 focus:ring-primary/15'
+    }`;
+
+  if (done) {
+    return (
+      <div className="fixed inset-0 bg-ink/50 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-8 text-center">
+          <div className="w-16 h-16 bg-green-50 border border-green-200 rounded-full flex items-center justify-center text-3xl mx-auto mb-4">✅</div>
+          <h2 className="font-bold text-ink text-lg mb-2">Request Sent!</h2>
+          <p className="text-sub text-sm mb-5">The conductor has been notified of your topic request.</p>
+          <button onClick={onClose} className="bg-primary hover:bg-primary-dark text-white font-bold py-3 px-8 rounded-xl text-sm transition-all">
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 bg-ink/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full" onClick={e => e.stopPropagation()}>
+        <div className="px-6 pt-6 pb-4 border-b border-slate-100">
+          <h2 className="font-bold text-ink text-lg">Request a Topic</h2>
+          <p className="text-dim text-sm mt-0.5">Ask the conductor to cover a specific topic</p>
+        </div>
+        <form onSubmit={handleSubmit} noValidate className="p-6 space-y-4">
+          {errors.form && (
+            <div className="bg-red-50 border border-red-200 text-err text-sm px-4 py-3 rounded-xl">⚠ {errors.form}</div>
+          )}
+          <div>
+            <label className="block text-sm font-semibold text-ink mb-1.5">Subject <span className="text-err">*</span></label>
+            <select value={form.subject} onChange={e => patch('subject', e.target.value)} className={inputCls('subject')}>
+              <option value="">Select subject…</option>
+              {SUBJECTS.map(s => <option key={s}>{s}</option>)}
+            </select>
+            {errors.subject && <p className="text-err text-xs mt-1.5">⚠ {errors.subject}</p>}
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-ink mb-1.5">Topic / Lesson <span className="text-err">*</span></label>
+            <input
+              type="text" value={form.topic}
+              onChange={e => patch('topic', e.target.value)}
+              placeholder="e.g. Integration by parts, Thermodynamics laws…"
+              className={inputCls('topic')}
+            />
+            {errors.topic && <p className="text-err text-xs mt-1.5">⚠ {errors.topic}</p>}
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-ink mb-1.5">
+              Details <span className="text-dim font-normal">(optional)</span>
+            </label>
+            <textarea
+              value={form.description} rows={3}
+              onChange={e => patch('description', e.target.value)}
+              placeholder="Add any extra context that would help the conductor…"
+              className={`${inputCls('description')} resize-none`}
+            />
+          </div>
+          <div className="flex gap-3 pt-1">
+            <button type="button" onClick={onClose}
+              className="flex-1 border border-slate-200 text-sub py-3 rounded-xl font-semibold text-sm hover:bg-slate-50 transition-all">
+              Cancel
+            </button>
+            <button type="submit" disabled={saving}
+              className="flex-1 bg-primary hover:bg-primary-dark text-white py-3 rounded-xl font-bold text-sm transition-all shadow-sm disabled:opacity-70 flex items-center justify-center gap-2">
+              {saving && <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+              {saving ? 'Sending…' : 'Send Request'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ── Helpers ── */
+/** Aggregate all localStorage ratings for every class a conductor has taught */
+function useConductorRating(conductorId, conductorClasses) {
+  const [avg, setAvg]   = useState(null);
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    if (!conductorId || !conductorClasses.length) { setAvg(null); setCount(0); return; }
+    let total = 0;
+    let n     = 0;
+    conductorClasses.forEach(c => {
+      try {
+        const raw = localStorage.getItem(`kuppi_ratings_${c.id}`);
+        if (!raw) return;
+        const list = JSON.parse(raw);
+        list.forEach(r => { total += r.rating; n++; });
+      } catch { /* silent */ }
+    });
+    setCount(n);
+    setAvg(n > 0 ? parseFloat((total / n).toFixed(1)) : null);
+  }, [conductorId, conductorClasses]);
+
+  return { avg, count };
+}
+
 /* ── Main Component ── */
 export default function ClassDetails() {
   const { id } = useParams();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const { classes } = useClasses();
-  const { isEnrolled } = useEnrollments();
+  const { classes, fetchClasses } = useClasses();
 
-  const [showRegister, setShowRegister] = useState(false);
-  const [emailData, setEmailData]       = useState(null);
-  const [activeTab, setActiveTab]       = useState('discussion');
+  /*
+   * Pull both helpers from EnrollmentsContext so we can check enrollment
+   * by student ID *and* by email address — this prevents re-registration
+   * even when the same person uses a different account.
+   */
+  const { isEnrolled, isEnrolledByEmail, fetchMyEnrollments, fetchMyClasses } = useEnrollments();
+  const [showRegister, setShowRegister]     = useState(false);
+  const [showRequest, setShowRequest]       = useState(false);
+  const [emailData, setEmailData]           = useState(null);
+  const [activeTab, setActiveTab]           = useState('discussion');
 
-  const cls = classes.find(c => c.id === Number(id));
+  // MongoDB _id is a string
+  const cls = classes.find(c => c.id === id || c._id === id);
+
+  // All classes by this conductor — computed before any early return so hooks stay unconditional
+  const allConductorClasses = classes.filter(c => c.conductorId === cls?.conductorId);
+
+  // Aggregate ratings from localStorage across all conductor classes (runs even if cls is null)
+  const { avg: localRatingAvg, count: localRatingCount } = useConductorRating(cls?.conductorId, allConductorClasses);
 
   if (!cls) {
     return (
@@ -239,11 +455,21 @@ export default function ClassDetails() {
       return s ? JSON.parse(s) : null;
     } catch { return null; }
   })();
-  const conductor      = storedProfile ?? dummyUsers.find(u => u.id === cls.conductorId);
-  const relatedClasses = classes.filter(c => c.conductorId === cls.conductorId && c.id !== cls.id);
-  const isFull         = cls.enrolled >= cls.seats;
-  const pct            = Math.min(100, (cls.enrolled / cls.seats) * 100);
-  const alreadyEnrolled = user?.role === 'student' && isEnrolled(cls.id, user?.id);
+  const conductor      = storedProfile ?? (cls.conductorData ?? dummyUsers.find(u => u.id?.toString() === cls.conductorId));
+
+  const relatedClasses = allConductorClasses.filter(c => c.id !== cls.id);
+
+  // Derived stats — used when backend/dummy data doesn't supply them
+  const displayRating      = conductor?.rating ?? localRatingAvg;
+  const displayRatingCount = localRatingCount;
+  const displayClassCount  = conductor?.classesHeld ?? allConductorClasses.length;
+  const displayStudents    = conductor?.totalStudents
+    ?? allConductorClasses.reduce((s, c) => s + (c.enrolled ?? 0), 0);
+  const isFull         = (cls.enrolled ?? 0) >= cls.seats;
+  const pct            = Math.min(100, ((cls.enrolled ?? 0) / Math.max(1, cls.seats)) * 100);
+  const userId = user?.id?.toString() ?? user?._id?.toString();
+  const alreadyEnrolled = user?.role === 'student' &&
+    (isEnrolled(cls.id, userId) || isEnrolledByEmail(cls.id, user?.email));
 
   function handleLogout() { logout(); navigate('/'); }
 
@@ -252,11 +478,27 @@ export default function ClassDetails() {
     setShowRegister(true);
   }
 
+  function handleRequestClick() {
+    if (!user) { navigate('/login'); return; }
+    setShowRequest(true);
+  }
+
   return (
     <div className="min-h-screen bg-white">
       {showRegister && (
         <RegisterModal cls={cls} user={user} onClose={() => setShowRegister(false)}
-          onSuccess={d => { setShowRegister(false); setEmailData(d); }} />
+          onSuccess={d => {
+            setShowRegister(false);
+            setEmailData(d);
+            // Refresh both contexts so the student dashboard and class list
+            // immediately reflect the new enrollment without a page reload.
+            fetchMyEnrollments(user?.id ?? user?._id);
+            fetchMyClasses().catch(() => {});
+            fetchClasses();
+          }} />
+      )}
+      {showRequest && user?.role === 'student' && (
+        <RequestTopicModal cls={cls} user={user} onClose={() => setShowRequest(false)} />
       )}
       {emailData && (
         <EmailConfirmModal studentName={emailData.name} studentEmail={emailData.email}
@@ -314,7 +556,7 @@ export default function ClassDetails() {
             <span className="flex items-center gap-1.5">📅 <span>{cls.date}</span></span>
             <span className="flex items-center gap-1.5">🕐 <span>{cls.time}</span></span>
             {cls.duration && <span className="flex items-center gap-1.5">⏱ <span>{cls.duration}</span></span>}
-            {(cls.location || cls.meetingLink) && <span className="flex items-center gap-1.5">📍 <span>{cls.location || cls.meetingLink}</span></span>}
+            <span className="flex items-center gap-1.5">📍 <span>{displayLocation(cls)}</span></span>
             <span className="flex items-center gap-1.5">💰 <span className="font-semibold text-ink">Rs. {cls.fee?.toLocaleString()}</span></span>
           </div>
         </div>
@@ -335,12 +577,12 @@ export default function ClassDetails() {
               <h2 className="font-bold text-ink text-lg mb-5">Class Details</h2>
               <dl className="grid sm:grid-cols-2 gap-4">
                 {[
-                  { label: 'Date',     value: cls.date,                              icon: '📅' },
-                  { label: 'Time',     value: cls.time,                              icon: '🕐' },
-                  { label: 'Duration', value: cls.duration || '—',                   icon: '⏱' },
-                  { label: 'Location', value: cls.location || cls.meetingLink || '—', icon: '📍' },
-                  { label: 'Fee',      value: `Rs. ${cls.fee?.toLocaleString()}`,     icon: '💰' },
-                  { label: 'Subject',  value: cls.subject,                            icon: '📚' },
+                  { label: 'Date',     value: cls.date,                   icon: '📅' },
+                  { label: 'Time',     value: cls.time,                   icon: '🕐' },
+                  { label: 'Duration', value: cls.duration || '—',        icon: '⏱' },
+                  { label: 'Location', value: displayLocation(cls),       icon: '📍' },
+                  { label: 'Fee',      value: `Rs. ${cls.fee?.toLocaleString()}`, icon: '💰' },
+                  { label: 'Subject',  value: cls.subject,                icon: '📚' },
                 ].map(({ label, value, icon }) => (
                   <div key={label} className="flex items-start gap-3 p-4 bg-sky-50 rounded-xl border border-sky-100">
                     <span className="text-lg">{icon}</span>
@@ -384,6 +626,8 @@ export default function ClassDetails() {
 
           {/* Right: Sidebar */}
           <div className="space-y-5 lg:sticky lg:top-20 lg:self-start">
+
+            {/* ── Price & Registration card ── */}
             <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
               <div className="flex items-baseline justify-between mb-4">
                 <span className="text-3xl font-extrabold text-primary">Rs. {cls.fee?.toLocaleString()}</span>
@@ -424,32 +668,55 @@ export default function ClassDetails() {
               )}
             </div>
 
+            {/* ── Conductor card ── */}
             {conductor && (
               <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm">
                 <p className="text-primary text-xs font-bold uppercase tracking-widest mb-4">Your Conductor</p>
+
+                {/* Avatar + name/title/university */}
                 <div className="flex items-center gap-4 mb-5">
                   <div className="w-14 h-14 rounded-full overflow-hidden shrink-0 shadow-sm flex items-center justify-center bg-gradient-to-br from-sky-400 to-primary">
-                    {conductor.photo
-                      ? <img src={conductor.photo} alt={conductor.name} className="w-full h-full object-cover" />
+                    {(conductor.photo || conductor.profilePicture)
+                      ? <img src={conductor.photo ?? conductor.profilePicture} alt={conductor.name} className="w-full h-full object-cover" />
                       : <span className="text-white font-extrabold text-xl">{conductor.name?.charAt(0)}</span>
                     }
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <h3 className="font-bold text-ink text-base leading-tight">{conductor.name}</h3>
-                    <p className="text-dim text-xs">{conductor.title}</p>
-                    <p className="text-dim text-xs">{conductor.university}</p>
+                    {conductor.title && <p className="text-dim text-xs mt-0.5">{conductor.title}</p>}
+                    {conductor.university && (
+                      <p className="text-dim text-xs flex items-center gap-1 mt-0.5">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
+                        </svg>
+                        {conductor.university}
+                      </p>
+                    )}
                   </div>
                 </div>
-                {conductor.rating && (
-                  <div className="flex items-center gap-2 mb-4">
-                    <StarRating rating={conductor.rating} />
-                    <span className="text-sm font-bold text-ink">{conductor.rating}</span>
-                    <span className="text-xs text-dim">/ 5.0</span>
-                  </div>
-                )}
+
+                {/* Overall rating row */}
+                <div className="flex items-center gap-2 pb-4 mb-4 border-b border-slate-100">
+                  <StarRating rating={displayRating ?? 0} />
+                  {displayRating ? (
+                    <>
+                      <span className="text-sm font-bold text-ink">{displayRating}</span>
+                      <span className="text-xs text-dim">/ 5.0</span>
+                      {displayRatingCount > 0 && (
+                        <span className="text-xs text-dim">({displayRatingCount} review{displayRatingCount !== 1 ? 's' : ''})</span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-xs text-dim italic">No reviews yet</span>
+                  )}
+                </div>
+
+                {/* Bio */}
                 {conductor.bio && (
-                  <p className="text-xs text-sub leading-relaxed mb-4 border-t border-slate-100 pt-4">{conductor.bio}</p>
+                  <p className="text-xs text-sub leading-relaxed mb-4">{conductor.bio}</p>
                 )}
+
+                {/* Subject tags */}
                 {conductor.subjects?.length > 0 && (
                   <div className="flex flex-wrap gap-2 mb-4">
                     {conductor.subjects.map(s => (
@@ -457,23 +724,33 @@ export default function ClassDetails() {
                     ))}
                   </div>
                 )}
-                {(conductor.totalStudents || conductor.classesHeld) && (
-                  <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-4">
-                    {conductor.totalStudents && (
-                      <div className="text-center p-3 bg-sky-50 rounded-xl border border-sky-100">
-                        <p className="text-lg font-extrabold text-primary">{conductor.totalStudents}+</p>
-                        <p className="text-[11px] text-dim">Students Taught</p>
-                      </div>
-                    )}
-                    {conductor.classesHeld && (
-                      <div className="text-center p-3 bg-sky-50 rounded-xl border border-sky-100">
-                        <p className="text-lg font-extrabold text-primary">{conductor.classesHeld}</p>
-                        <p className="text-[11px] text-dim">Classes Held</p>
-                      </div>
-                    )}
+
+                {/* Stats grid — always visible */}
+                <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-4">
+                  <div className="text-center p-3 bg-sky-50 rounded-xl border border-sky-100">
+                    <p className="text-lg font-extrabold text-primary">
+                      {displayStudents > 0 ? `${displayStudents}+` : '—'}
+                    </p>
+                    <p className="text-[11px] text-dim">Students Taught</p>
                   </div>
-                )}
+                  <div className="text-center p-3 bg-sky-50 rounded-xl border border-sky-100">
+                    <p className="text-lg font-extrabold text-primary">
+                      {displayClassCount > 0 ? displayClassCount : '—'}
+                    </p>
+                    <p className="text-[11px] text-dim">Classes Held</p>
+                  </div>
+                </div>
               </div>
+            )}
+
+            {/* ── Request a Topic — below conductor card ── */}
+            {(user?.role === 'student' || !user) && (
+              <button
+                onClick={handleRequestClick}
+                className="block w-full py-3 rounded-xl border border-violet-200 bg-violet-50 text-violet-700 text-sm font-semibold hover:bg-violet-100 transition-all text-center"
+              >
+                💡 Request a Topic
+              </button>
             )}
           </div>
         </div>
@@ -484,10 +761,11 @@ export default function ClassDetails() {
         {/* Tab bar */}
         <div className="flex flex-wrap gap-1 border-b border-slate-100 mb-8">
           {[
-            { key: 'discussion', icon: '💬', label: 'Discussion' },
-            { key: 'notes',      icon: '📄', label: 'Class Notes' },
-            { key: 'rating',     icon: '⭐', label: 'Rate Class' },
-            { key: 'ai',         icon: '🤖', label: 'AI Analysis' },
+            { key: 'discussion',    icon: '💬', label: 'Discussion' },
+            { key: 'notes',         icon: '📄', label: 'Class Notes' },
+            { key: 'rating',        icon: '⭐', label: 'Rate Class' },
+            { key: 'ai',            icon: '🤖', label: 'AI Analysis' },
+            { key: 'announcements', icon: '📢', label: 'Announcements' },
           ].map(tab => (
             <button
               key={tab.key}
@@ -512,13 +790,16 @@ export default function ClassDetails() {
           </div>
         )}
         {activeTab === 'notes' && (
-          <UploadNotes classId={cls.id} conductorId={cls.conductorId} />
+          <UploadNotes classId={cls.id} />
         )}
         {activeTab === 'rating' && (
           <Rating classId={cls.id} conductorId={cls.conductorId} />
         )}
         {activeTab === 'ai' && (
           <AISummary classId={cls.id} />
+        )}
+        {activeTab === 'announcements' && (
+          <ClassAnnouncements classId={cls.id} conductorId={cls.conductorId} />
         )}
       </div>
 

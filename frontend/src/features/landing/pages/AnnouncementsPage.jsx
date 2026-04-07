@@ -1,7 +1,21 @@
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { dummyAnnouncements } from '../../../data/dummyData';
+import { api } from '../../../services/api';
+
+const BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace('/api', '');
 
 function AnnouncementsPage() {
+  const [announcements, setAnnouncements] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState('');
+
+  useEffect(() => {
+    api.get('/announcements/landing/active', false)
+      .then(res => setAnnouncements(res.data || []))
+      .catch(err => setError(err.message))
+      .finally(() => setLoading(false));
+  }, []);
+
   return (
     <div className="min-h-screen bg-page">
 
@@ -23,26 +37,47 @@ function AnnouncementsPage() {
           <p className="text-sub text-sm mt-1">Stay up to date with the latest news from KuppiConnect.</p>
         </div>
 
+        {loading && (
+          <div className="text-center py-16 text-sub text-sm">Loading announcements…</div>
+        )}
+
+        {error && (
+          <div className="text-center py-16 text-err text-sm">Failed to load: {error}</div>
+        )}
+
+        {!loading && !error && announcements.length === 0 && (
+          <div className="text-center py-16 bg-white rounded-2xl border border-slate-100 shadow-sm">
+            <span className="text-5xl block mb-3">📢</span>
+            <p className="font-bold text-ink mb-1">No active announcements</p>
+            <p className="text-sub text-sm">Check back soon for updates.</p>
+          </div>
+        )}
+
         <div className="space-y-4">
-          {dummyAnnouncements.map((a) => (
+          {announcements.map((a) => (
             <div
-              key={a.id}
-              className={`bg-card rounded-2xl p-6 border transition-all ${
-                a.pinned
-                  ? 'border-primary/40 shadow-[0_4px_20px_rgba(13,148,136,0.12)]'
-                  : 'border-rim hover:shadow-[0_4px_20px_rgba(13,148,136,0.10)] hover:border-primary/25 hover:-translate-y-0.5'
-              }`}
+              key={a._id}
+              className="bg-card rounded-2xl border border-rim hover:shadow-[0_4px_20px_rgba(13,148,136,0.10)] hover:border-primary/25 hover:-translate-y-0.5 transition-all overflow-hidden"
             >
-              <div className="flex items-center gap-2 mb-3">
-                {a.pinned && (
-                  <span className="bg-gradient-to-r from-primary to-secondary text-white text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full">
-                    Pinned
+              {a.image && (
+                <img
+                  src={`${BASE_URL}/${a.image}`}
+                  alt={a.title}
+                  className="w-full h-40 object-cover"
+                />
+              )}
+              <div className="p-6">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs text-dim">
+                    📅 {new Date(a.startDate).toLocaleDateString()} — {new Date(a.endDate).toLocaleDateString()}
                   </span>
-                )}
-                <span className="text-xs text-dim">{a.date}</span>
+                  {a.conductor?.name && (
+                    <span className="text-xs text-dim">· by {a.conductor.name}</span>
+                  )}
+                </div>
+                <h3 className="text-base font-bold text-ink mb-1">{a.title}</h3>
+                <p className="text-sub text-sm leading-relaxed">{a.description}</p>
               </div>
-              <h3 className="text-base font-bold text-ink mb-1">{a.title}</h3>
-              <p className="text-sub text-sm leading-relaxed">{a.body}</p>
             </div>
           ))}
         </div>

@@ -1,73 +1,51 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
-import { dummyReviews, dummyClasses } from '../../../data/dummyData';
+import { api } from '../../../services/api';
 
-function StarRow({ rating, interactive = false, onChange }) {
+function StarRow({ rating }) {
   return (
     <div className="flex gap-0.5">
       {[1, 2, 3, 4, 5].map(n => (
-        <button
-          key={n}
-          type={interactive ? 'button' : undefined}
-          onClick={interactive ? () => onChange(n) : undefined}
-          className={`text-xl transition-transform ${
-            interactive ? 'hover:scale-110 cursor-pointer' : 'cursor-default pointer-events-none'
-          } ${n <= rating ? 'opacity-100' : 'opacity-20'}`}
-        >
-          ⭐
-        </button>
+        <span key={n} className={`text-base ${n <= rating ? 'text-amber-400' : 'text-slate-200'}`}>★</span>
       ))}
     </div>
   );
 }
 
-function ReviewsPage() {
-  const { user } = useAuth();
-  const [reviews, setReviews] = useState(dummyReviews);
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ classId: '', rating: 5, comment: '' });
+/* ── Student view ── */
+function StudentReviews() {
+  const [ratings, setRatings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState('');
 
-  const avgRating = (reviews.reduce((s, r) => s + r.rating, 0) / reviews.length).toFixed(1);
+  useEffect(() => {
+    api.get('/content/ratings/mine')
+      .then(res => setRatings(res.data ?? []))
+      .catch(err => setError(err.message || 'Failed to load your ratings.'))
+      .finally(() => setLoading(false));
+  }, []);
 
-  function handleSubmit(e) {
-    e.preventDefault();
-    if (!form.classId || !form.comment.trim()) return;
-    setReviews(prev => [{
-      id: Date.now(),
-      classId: Number(form.classId),
-      studentName: user?.name || 'Anonymous',
-      rating: form.rating,
-      comment: form.comment.trim(),
-      date: new Date().toISOString().slice(0, 10),
-    }, ...prev]);
-    setForm({ classId: '', rating: 5, comment: '' });
-    setShowForm(false);
-  }
+  const totalRated  = ratings.length;
+  const avgMyRating = totalRated
+    ? (ratings.reduce((s, r) => s + r.rating, 0) / totalRated).toFixed(1)
+    : '—';
+  const subjects = new Set(ratings.map(r => r.class?.subject).filter(Boolean)).size;
+
+  if (loading) return (
+    <div className="flex justify-center py-16">
+      <div className="w-8 h-8 border-[3px] border-primary/25 border-t-primary rounded-full animate-spin" />
+    </div>
+  );
+  if (error) return <div className="text-center py-10 text-err text-sm">⚠ {error}</div>;
 
   return (
-    <div>
-      <div className="flex items-end justify-between mb-8">
-        <div>
-          <p className="text-primary text-xs font-bold uppercase tracking-widest mb-1">Community</p>
-          <h1 className="text-3xl font-bold text-ink">Reviews & Ratings</h1>
-          <p className="text-sub text-sm mt-1">See what students say about their kuppi classes.</p>
-        </div>
-        {user?.role === 'student' && (
-          <button
-            onClick={() => setShowForm(v => !v)}
-            className="bg-gradient-to-r from-primary to-secondary hover:from-primary-dark hover:to-secondary-dark text-white text-sm font-bold px-5 py-2.5 rounded-xl transition-all shadow-sm hover:shadow-[0_4px_16px_rgba(13,148,136,0.4)]"
-          >
-            {showForm ? 'Cancel' : '+ Write Review'}
-          </button>
-        )}
-      </div>
-
-      {/* Stats */}
+    <>
       <div className="grid grid-cols-3 gap-4 mb-8">
         {[
-          { label: 'Total Reviews',    value: reviews.length,                          icon: '💬' },
-          { label: 'Average Rating',   value: `${avgRating} ★`,                       icon: '⭐' },
-          { label: 'Classes Reviewed', value: new Set(reviews.map(r => r.classId)).size, icon: '🎓' },
+          { label: 'Classes Rated', value: totalRated, icon: '⭐' },
+          { label: 'Average Given', value: `${avgMyRating} ★`, icon: '📊' },
+          { label: 'Subjects',      value: subjects,   icon: '🎓' },
         ].map(s => (
           <div key={s.label} className="bg-card border border-rim rounded-2xl p-5 flex items-center gap-4 hover:shadow-[0_4px_20px_rgba(13,148,136,0.12)] hover:border-primary/30 hover:-translate-y-0.5 transition-all">
             <span className="text-2xl">{s.icon}</span>
@@ -79,74 +57,146 @@ function ReviewsPage() {
         ))}
       </div>
 
-      {/* Write review form */}
-      {showForm && (
-            <div className="bg-card border border-primary/30 rounded-2xl p-6 mb-6 shadow-[0_4px_20px_rgba(13,148,136,0.12)]">
-          <h2 className="font-bold text-ink mb-4">Write a Review</h2>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-semibold text-ink mb-1.5">Select Class</label>
-              <select
-                value={form.classId}
-                onChange={e => setForm({ ...form, classId: e.target.value })}
-                className="w-full border border-field bg-white rounded-xl px-4 py-2.5 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-primary/40"
-                required
-              >
-                <option value="">Choose a class…</option>
-                {dummyClasses.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
-              </select>
+      {totalRated === 0 ? (
+        <div className="text-center py-16 bg-slate-50 rounded-2xl border border-slate-100">
+          <p className="text-5xl mb-3">⭐</p>
+          <p className="text-sm font-semibold text-ink mb-1">No ratings yet</p>
+          <p className="text-xs text-dim mb-4">Once you rate a class, it will appear here.</p>
+          <Link to="/student/classes" className="inline-block bg-primary hover:bg-primary-dark text-white text-sm font-bold px-5 py-2.5 rounded-xl transition-all shadow-sm">
+            Browse Classes
+          </Link>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {ratings.map(r => (
+            <div key={r._id} className="bg-card border border-rim rounded-2xl p-6 hover:shadow-[0_6px_25px_rgba(13,148,136,0.12)] hover:border-primary/25 hover:-translate-y-0.5 transition-all">
+              <div className="flex items-start justify-between flex-wrap gap-3">
+                <div>
+                  <Link to={`/class/${r.class?._id}`} className="font-bold text-ink text-base hover:text-primary transition-colors">
+                    {r.class?.title || 'Unknown Class'}
+                  </Link>
+                  {r.class?.subject && <p className="text-xs text-primary font-semibold mt-0.5">{r.class.subject}</p>}
+                </div>
+                <div className="flex flex-col items-end gap-1">
+                  <StarRow rating={r.rating} />
+                  <span className="text-xs text-dim">
+                    {new Date(r.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  </span>
+                </div>
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-semibold text-ink mb-1.5">Rating</label>
-              <StarRow rating={form.rating} interactive onChange={r => setForm({ ...form, rating: r })} />
-            </div>
-            <div>
-              <label className="block text-sm font-semibold text-ink mb-1.5">Comment</label>
-              <textarea
-                value={form.comment}
-                onChange={e => setForm({ ...form, comment: e.target.value })}
-                placeholder="Share your experience with this class…"
-                rows={3}
-                className="w-full border border-field bg-white rounded-xl px-4 py-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-primary/40 resize-none"
-                required
-              />
-            </div>
-            <button
-              type="submit"
-              className="bg-gradient-to-r from-primary to-secondary hover:from-primary-dark hover:to-secondary-dark text-white font-bold text-sm px-6 py-2.5 rounded-xl transition-all shadow-sm hover:shadow-[0_4px_16px_rgba(13,148,136,0.4)]"
-            >
-              Submit Review
-            </button>
-          </form>
+          ))}
         </div>
       )}
-
-      {/* Reviews list */}
-      <div className="space-y-4">
-        {reviews.map(review => {
-          const cls = dummyClasses.find(c => c.id === review.classId);
-          return (
-            <div key={review.id} className="bg-card border border-rim rounded-2xl p-6 hover:shadow-[0_6px_25px_rgba(13,148,136,0.12)] hover:border-primary/25 hover:-translate-y-0.5 transition-all">
-              <div className="flex items-start justify-between mb-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 bg-gradient-to-br from-primary to-secondary rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
-                    {review.studentName.charAt(0)}
-                  </div>
-                  <div>
-                    <p className="font-semibold text-ink text-sm">{review.studentName}</p>
-                    <p className="text-dim text-xs">{review.date}</p>
-                  </div>
-                </div>
-                <StarRow rating={review.rating} />
-              </div>
-              {cls && <p className="text-[10px] font-bold text-primary uppercase tracking-widest mb-2">{cls.title}</p>}
-              <p className="text-sub text-sm leading-relaxed">{review.comment}</p>
-            </div>
-          );
-        })}
-      </div>
-    </div>
+    </>
   );
 }
 
-export default ReviewsPage;
+/* ── Conductor view ── */
+function ConductorReviews() {
+  const [classRatings, setClassRatings] = useState([]);
+  const [loading, setLoading]           = useState(true);
+  const [error, setError]               = useState('');
+
+  useEffect(() => {
+    api.get('/content/ratings/my-classes')
+      .then(res => setClassRatings(res.data ?? []))
+      .catch(err => setError(err.message || 'Failed to load class ratings.'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const totalRatings = classRatings.reduce((s, c) => s + c.totalCount, 0);
+  const ratedClasses = classRatings.filter(c => c.totalCount > 0).length;
+  const overallAvg   = totalRatings
+    ? (classRatings.reduce((s, c) => s + c.average * c.totalCount, 0) / totalRatings).toFixed(1)
+    : '—';
+
+  if (loading) return (
+    <div className="flex justify-center py-16">
+      <div className="w-8 h-8 border-[3px] border-primary/25 border-t-primary rounded-full animate-spin" />
+    </div>
+  );
+  if (error) return <div className="text-center py-10 text-err text-sm">⚠ {error}</div>;
+
+  return (
+    <>
+      <div className="grid grid-cols-3 gap-4 mb-8">
+        {[
+          { label: 'Total Ratings',   value: totalRatings, icon: '⭐' },
+          { label: 'Overall Average', value: `${overallAvg} ★`, icon: '📊' },
+          { label: 'Classes Rated',   value: ratedClasses, icon: '🎓' },
+        ].map(s => (
+          <div key={s.label} className="bg-card border border-rim rounded-2xl p-5 flex items-center gap-4 hover:shadow-[0_4px_20px_rgba(13,148,136,0.12)] hover:border-primary/30 hover:-translate-y-0.5 transition-all">
+            <span className="text-2xl">{s.icon}</span>
+            <div>
+              <p className="text-2xl font-extrabold text-ink">{s.value}</p>
+              <p className="text-dim text-xs mt-0.5">{s.label}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {classRatings.length === 0 ? (
+        <div className="text-center py-16 bg-slate-50 rounded-2xl border border-slate-100">
+          <p className="text-5xl mb-3">⭐</p>
+          <p className="text-sm font-semibold text-ink mb-1">No classes yet</p>
+          <Link to="/conductor/create" className="inline-block bg-primary hover:bg-primary-dark text-white text-sm font-bold px-5 py-2.5 rounded-xl transition-all shadow-sm mt-4">
+            Create a Class
+          </Link>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {classRatings.map(c => (
+            <div key={String(c.classId)} className="bg-card border border-rim rounded-2xl p-6 hover:shadow-[0_6px_25px_rgba(13,148,136,0.12)] hover:border-primary/25 hover:-translate-y-0.5 transition-all">
+              <div className="flex items-start justify-between flex-wrap gap-3">
+                <div>
+                  <Link to={`/class/${c.classId}`} className="font-bold text-ink text-base hover:text-primary transition-colors">
+                    {c.title}
+                  </Link>
+                  {c.subject && <p className="text-xs text-primary font-semibold mt-0.5">{c.subject}</p>}
+                </div>
+                {c.totalCount > 0 ? (
+                  <div className="flex flex-col items-end gap-1">
+                    <div className="flex items-center gap-2">
+                      <StarRow rating={Math.round(c.average)} />
+                      <span className="text-sm font-bold text-amber-500">{c.average.toFixed(1)}</span>
+                    </div>
+                    <span className="text-xs text-dim">{c.totalCount} rating{c.totalCount !== 1 ? 's' : ''}</span>
+                  </div>
+                ) : (
+                  <span className="text-xs text-dim bg-slate-50 border border-slate-100 px-3 py-1.5 rounded-full">No ratings yet</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+export default function ReviewsPage() {
+  const { user } = useAuth();
+
+  return (
+    <div>
+      <div className="flex items-end justify-between mb-8">
+        <div>
+          <p className="text-primary text-xs font-bold uppercase tracking-widest mb-1">
+            {user?.role === 'conductor' ? 'My Classes' : 'My Activity'}
+          </p>
+          <h1 className="text-3xl font-bold text-ink">
+            {user?.role === 'conductor' ? 'Student Ratings' : 'My Ratings'}
+          </h1>
+          <p className="text-sub text-sm mt-1">
+            {user?.role === 'conductor'
+              ? 'See how students have rated your classes.'
+              : 'Classes you have rated on KuppiConnect.'}
+          </p>
+        </div>
+      </div>
+
+      {user?.role === 'conductor' ? <ConductorReviews /> : <StudentReviews />}
+    </div>
+  );
+}

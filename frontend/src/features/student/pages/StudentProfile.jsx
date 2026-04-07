@@ -1,20 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../auth/AuthContext';
 import { useEnrollments } from '../../../contexts/EnrollmentsContext';
-
-const LS_KEY = 'kuppi_student_profile';
-
-function loadProfile(userId) {
-  try {
-    const s = localStorage.getItem(`${LS_KEY}_${userId}`);
-    if (s) return JSON.parse(s);
-  } catch {}
-  return null;
-}
-
-function saveProfile(userId, data) {
-  try { localStorage.setItem(`${LS_KEY}_${userId}`, JSON.stringify(data)); } catch {}
-}
+import { authService } from '../../../services/authService';
 
 function validate(form) {
   const e = {};
@@ -32,29 +19,29 @@ function FieldError({ msg }) {
 }
 
 export default function StudentProfile() {
-  const { user } = useAuth();
+  const { user, updateUserProfile } = useAuth();
   const { getStudentEnrollments } = useEnrollments();
   const today = new Date().toISOString().split('T')[0];
 
-  const myEnrollments   = getStudentEnrollments(user?.id);
+  const myEnrollments   = getStudentEnrollments(user?._id || user?.id);
   const upcoming        = myEnrollments.filter(e => e.classDate >= today).length;
   const completed       = myEnrollments.filter(e => e.classDate < today).length;
 
-  const initialProfile = loadProfile(user?.id) ?? {
+  const [form, setForm]     = useState({
     name:        user?.name ?? '',
     email:       user?.email ?? '',
-    phone:       '',
-    university:  '',
-    faculty:     '',
-    yearOfStudy: '',
-    bio:         '',
-    photo:       null,
-  };
-
-  const [form, setForm]     = useState(initialProfile);
+    phone:       user?.phone ?? '',
+    university:  user?.university ?? '',
+    faculty:     user?.faculty ?? '',
+    yearOfStudy: user?.yearOfStudy ?? '',
+    bio:         user?.bio ?? '',
+    photo:       user?.profilePicture ?? null,
+  });
   const [errors, setErrors] = useState({});
   const [editing, setEditing] = useState(false);
   const [saved, setSaved]     = useState(false);
+  const [saving, setSaving]   = useState(false);
+  const [serverError, setServerError] = useState('');
 
   function inputCls(name) {
     return `w-full px-4 py-3 text-sm border rounded-xl focus:outline-none transition-all ${
@@ -77,14 +64,31 @@ export default function StudentProfile() {
     reader.readAsDataURL(file);
   }
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
     const errs = validate(form);
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
-    saveProfile(user?.id, form);
-    setEditing(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+
+    setSaving(true);
+    setServerError('');
+    try {
+      await updateUserProfile({
+        name: form.name,
+        phone: form.phone,
+        university: form.university,
+        faculty: form.faculty,
+        yearOfStudy: form.yearOfStudy,
+        bio: form.bio,
+        profilePicture: form.photo || '',
+      });
+      setEditing(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (err) {
+      setServerError(err.message || 'Failed to save profile.');
+    } finally {
+      setSaving(false);
+    }
   }
 
   const YEARS = ['1st Year', '2nd Year', '3rd Year', '4th Year', 'Postgraduate', 'Other'];
@@ -285,16 +289,23 @@ export default function StudentProfile() {
                 </div>
 
                 {/* Actions */}
-                <div className="p-6 flex gap-3">
-                  <button type="submit"
-                    className="flex-1 bg-primary hover:bg-primary-dark text-white py-3.5 rounded-xl font-bold text-sm transition-all shadow-sm hover:shadow-[0_4px_14px_rgba(14,165,233,0.35)]">
-                    Save Profile
-                  </button>
-                  <button type="button"
-                    onClick={() => { setEditing(false); setErrors({}); setForm(loadProfile(user?.id) ?? initialProfile); }}
-                    className="px-8 py-3.5 border border-slate-200 text-sub rounded-xl text-sm font-semibold hover:bg-slate-50 transition-all">
-                    Cancel
-                  </button>
+                <div className="p-6 space-y-3">
+                  {serverError && (
+                    <div className="flex items-center gap-2 bg-red-50 border border-err/30 text-err rounded-xl px-4 py-3 text-sm">
+                      <span>⚠</span> {serverError}
+                    </div>
+                  )}
+                  <div className="flex gap-3">
+                    <button type="submit" disabled={saving}
+                      className="flex-1 bg-primary hover:bg-primary-dark text-white py-3.5 rounded-xl font-bold text-sm transition-all shadow-sm hover:shadow-[0_4px_14px_rgba(14,165,233,0.35)] disabled:opacity-60 disabled:cursor-not-allowed">
+                      {saving ? 'Saving…' : 'Save Profile'}
+                    </button>
+                    <button type="button"
+                      onClick={() => { setEditing(false); setErrors({}); setServerError(''); }}
+                      className="px-8 py-3.5 border border-slate-200 text-sub rounded-xl text-sm font-semibold hover:bg-slate-50 transition-all">
+                      Cancel
+                    </button>
+                  </div>
                 </div>
               </form>
             )}

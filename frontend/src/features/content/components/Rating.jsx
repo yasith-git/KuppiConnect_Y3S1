@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../auth/AuthContext';
+import { api } from '../../../services/api';
 
 const LABELS = ['', 'Poor', 'Fair', 'Good', 'Very Good', 'Excellent'];
 
@@ -39,58 +40,65 @@ function MiniStars({ value }) {
 
 export default function Rating({ classId, conductorId }) {
   const { user } = useAuth();
-  const [ratings, setRatings] = useState([]);   // [{ studentId, rating }]
-  const [myRating, setMyRating] = useState(0);
-  const [hover, setHover] = useState(0);
-  const [submitted, setSubmitted] = useState(false);
+  /* Aggregate stats from backend */
+  const [stats, setStats]               = useState({ average: 0, totalCount: 0, distribution: [] });
+  const [myRating, setMyRating]         = useState(0);   // confirmed, persisted rating
+  const [selected, setSelected]         = useState(0);   // interactive pick before submit
+  const [hover, setHover]               = useState(0);
+  const [loading, setLoading]           = useState(true);
+  const [submitting, setSubmitting]     = useState(false);
+  const [submitted, setSubmitted]       = useState(false);
   const [justSubmitted, setJustSubmitted] = useState(false);
+  const [ratingError, setRatingError]   = useState('');
 
-  /* Load ratings from localStorage */
+  /* Fetch ratings from backend on mount */
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(`kuppi_ratings_${classId}`);
-      if (raw) {
-        const data = JSON.parse(raw);
-        setRatings(data);
-        if (user) {
-          const mine = data.find(r => r.studentId === user.id);
-          if (mine) { setMyRating(mine.rating); setSubmitted(true); }
+    if (!classId) return;
+    setLoading(true);
+    api.get(`/content/ratings/${classId}`)
+      .then(res => {
+        const d = res.data;
+        setStats({
+          average:      d.average      ?? 0,
+          totalCount:   d.totalCount   ?? 0,
+          distribution: d.distribution ?? [],
+        });
+        if ((d.myRating ?? 0) > 0) {
+          setMyRating(d.myRating);
+          setSelected(d.myRating);
+          setSubmitted(true);
         }
-      }
-    } catch { /* silent */ }
-  }, [classId, user]);
+      })
+      .catch(() => { /* non-fatal — UI still renders empty state */ })
+      .finally(() => setLoading(false));
+  }, [classId]);
 
-  const average = ratings.length
-    ? (ratings.reduce((s, r) => s + r.rating, 0) / ratings.length)
-    : 0;
+  const displayAvg = stats.totalCount > 0 ? Number(stats.average).toFixed(1) : '—';
+  /* Backend returns distribution ascending [star 1…5]; reverse to show 5…1 in UI */
+  const distribution = [...stats.distribution].reverse();
 
-  const displayAvg = ratings.length ? average.toFixed(1) : '—';
-
-  /* Distribution breakdown */
-  const distribution = [5, 4, 3, 2, 1].map(star => ({
-    star,
-    count: ratings.filter(r => r.rating === star).length,
-    pct: ratings.length ? Math.round((ratings.filter(r => r.rating === star).length / ratings.length) * 100) : 0,
-  }));
-
-  function submitRating(val) {
-    if (!user || submitted || user.role === 'conductor') return;
-    const updated = [...ratings.filter(r => r.studentId !== user.id), { studentId: user.id, rating: val }];
-    setRatings(updated);
-    setMyRating(val);
-    localStorage.setItem(`kuppi_ratings_${classId}`, JSON.stringify(updated));
-
-    /* Update conductor's aggregate rating in their profile */
+  async function submitRating(val) {
+    if (!user || user.role !== 'student' || submitted || submitting || !val) return;
+    setSubmitting(true);
+    setRatingError('');
     try {
-      const newAvg = updated.reduce((s, r) => s + r.rating, 0) / updated.length;
-      const profileKey = `kuppi_profile_${conductorId}`;
-      const stored = localStorage.getItem(profileKey);
-      const profile = stored ? JSON.parse(stored) : {};
-      localStorage.setItem(profileKey, JSON.stringify({ ...profile, rating: parseFloat(newAvg.toFixed(1)) }));
-    } catch { /* silent */ }
-
-    setJustSubmitted(true);
-    setTimeout(() => { setJustSubmitted(false); setSubmitted(true); }, 800);
+      await api.post(`/content/ratings/${classId}`, { rating: val });
+      /* Refetch for accurate aggregate stats with distribution */
+      const res = await api.get(`/content/ratings/${classId}`);
+      const d = res.data;
+      setStats({
+        average:      d.average      ?? 0,
+        totalCount:   d.totalCount   ?? 0,
+        distribution: d.distribution ?? [],
+      });
+      setMyRating(val);
+      setJustSubmitted(true);
+      setTimeout(() => { setJustSubmitted(false); setSubmitted(true); }, 800);
+    } catch (err) {
+      setRatingError(err.message || 'Failed to submit rating. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -102,28 +110,34 @@ export default function Rating({ classId, conductorId }) {
       <div className="grid sm:grid-cols-2 gap-8 items-start">
         {/* Left: Average + distribution */}
         <div className="flex flex-col items-center bg-sky-50 border border-sky-100 rounded-2xl p-6 gap-3">
-          <span className="text-6xl font-extrabold text-primary leading-none">{displayAvg}</span>
-          <MiniStars value={average} />
-          <p className="text-xs text-dim font-medium">{ratings.length} rating{ratings.length !== 1 ? 's' : ''}</p>
+          {loading ? (
+            <div className="w-8 h-8 border-[3px] border-primary/25 border-t-primary rounded-full animate-spin" />
+          ) : (
+            <>
+              <span className="text-6xl font-extrabold text-primary leading-none">{displayAvg}</span>
+              <MiniStars value={stats.average} />
+              <p className="text-xs text-dim font-medium">{stats.totalCount} rating{stats.totalCount !== 1 ? 's' : ''}</p>
 
-          {ratings.length > 0 && (
-            <div className="w-full mt-2 space-y-1.5">
-              {distribution.map(({ star, pct, count }) => (
-                <div key={star} className="flex items-center gap-2 text-xs">
-                  <span className="w-3 text-dim text-right">{star}</span>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="#F59E0B" stroke="#F59E0B" strokeWidth="1">
-                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                  </svg>
-                  <div className="flex-1 h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-amber-400 rounded-full transition-all duration-700"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                  <span className="w-5 text-dim text-right">{count}</span>
+              {stats.totalCount > 0 && (
+                <div className="w-full mt-2 space-y-1.5">
+                  {distribution.map(({ star, pct, count }) => (
+                    <div key={star} className="flex items-center gap-2 text-xs">
+                      <span className="w-3 text-dim text-right">{star}</span>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="#F59E0B" stroke="#F59E0B" strokeWidth="1">
+                        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                      </svg>
+                      <div className="flex-1 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-amber-400 rounded-full transition-all duration-700"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className="w-5 text-dim text-right">{count}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
         </div>
 
@@ -155,6 +169,9 @@ export default function Rating({ classId, conductorId }) {
             </div>
           ) : (
             <>
+              {ratingError && (
+                <div className="mb-3 text-xs text-err bg-red-50 border border-red-200 px-3 py-2 rounded-lg">⚠ {ratingError}</div>
+              )}
               <p className="text-sm font-semibold text-ink mb-4">How would you rate this class?</p>
               <div
                 className="flex gap-1 mb-2"
@@ -164,23 +181,24 @@ export default function Rating({ classId, conductorId }) {
                   <Star
                     key={n}
                     index={n}
-                    filled={n <= myRating}
+                    filled={n <= selected}
                     highlighted={n <= hover}
                     onHover={setHover}
-                    onClick={val => setMyRating(val)}
+                    onClick={val => setSelected(val)}
                     interactive
                   />
                 ))}
               </div>
               <p className="text-xs font-semibold text-amber-600 h-4 mb-4">
-                {LABELS[hover || myRating] || 'Hover over a star'}
+                {LABELS[hover || selected] || 'Hover over a star'}
               </p>
               <button
-                onClick={() => submitRating(myRating)}
-                disabled={!myRating}
-                className="px-6 py-2.5 bg-primary hover:bg-primary-dark text-white text-sm font-bold rounded-xl transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-[0_4px_14px_rgba(14,165,233,0.35)] hover:-translate-y-0.5"
+                onClick={() => submitRating(selected)}
+                disabled={!selected || submitting}
+                className="px-6 py-2.5 bg-primary hover:bg-primary-dark text-white text-sm font-bold rounded-xl transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-[0_4px_14px_rgba(14,165,233,0.35)] hover:-translate-y-0.5 flex items-center gap-2"
               >
-                Submit Rating
+                {submitting && <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+                {submitting ? 'Submitting…' : 'Submit Rating'}
               </button>
             </>
           )}

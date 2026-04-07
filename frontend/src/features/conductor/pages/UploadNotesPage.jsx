@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../auth/AuthContext';
 import { useClasses } from '../../../contexts/ClassesContext';
+import { api } from '../../../services/api';
+
+const SERVER_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace('/api', '');
 
 function formatSize(bytes) {
   if (!bytes) return '—';
@@ -25,87 +28,107 @@ export default function UploadNotesPage() {
   const { user } = useAuth();
   const { classes } = useClasses();
 
-  const myClasses = classes.filter(c => String(c.conductorId) === String(user?.id));
+  const userId    = user?.id?.toString() ?? user?._id?.toString();
+  const myClasses = classes.filter(c => String(c.conductorId) === userId);
 
   const [selectedClassId, setSelectedClassId] = useState('');
-  const [notes, setNotes] = useState([]);
-  const [dragging, setDragging] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadFileName, setUploadFileName] = useState('');
-  const [successMsg, setSuccessMsg] = useState('');
+  const [notes, setNotes]               = useState([]);
+  const [loadingNotes, setLoadingNotes]  = useState(false);
+  const [dragging, setDragging]          = useState(false);
+  const [uploading, setUploading]        = useState(false);
+  const [successMsg, setSuccessMsg]      = useState('');
+  const [errorMsg, setErrorMsg]          = useState('');
+  const [deletingId, setDeletingId]      = useState(null);
+
+  /* Confirm-before-upload modal state */
+  const [pendingFile, setPendingFile]    = useState(null);   // File object awaiting confirm
+  const [pendingTitle, setPendingTitle]  = useState('');     // Editable title in modal
+  const [modalError, setModalError]      = useState('');     // Error shown inside the modal
+
   const fileRef = useRef();
 
-  /* Load notes when selected class changes */
+  /* Fetch notes from backend when selected class changes */
   useEffect(() => {
     if (!selectedClassId) { setNotes([]); return; }
-    try {
-      const raw = localStorage.getItem(`kuppi_notes_${selectedClassId}`);
-      setNotes(raw ? JSON.parse(raw) : []);
-    } catch { setNotes([]); }
+    setLoadingNotes(true);
+    setErrorMsg('');
+    api.get(`/content/notes/${selectedClassId}`)
+      .then(res => setNotes(res.data ?? []))
+      .catch(err => setErrorMsg(err.message || 'Failed to load notes'))
+      .finally(() => setLoadingNotes(false));
   }, [selectedClassId]);
 
-  function persist(updated) {
-    setNotes(updated);
-    localStorage.setItem(`kuppi_notes_${selectedClassId}`, JSON.stringify(updated));
-  }
-
-  function processFile(file) {
+  /* Stage the file → open confirm modal (no upload yet) */
+  function stageFile(file) {
     if (!file) return;
-    if (file.type !== 'application/pdf') { alert('Only PDF files are accepted.'); return; }
-    if (file.size > 20 * 1024 * 1024) { alert('File must be under 20 MB.'); return; }
-
-    setUploadFileName(file.name);
-    setUploading(true);
-
-    const reader = new FileReader();
-    reader.onload = ev => {
-      const entry = {
-        id: Date.now(),
-        fileName: file.name,
-        size: file.size,
-        uploadedBy: user.name,
-        uploadedAt: new Date().toISOString().slice(0, 10),
-        fileData: ev.target.result,
-      };
-      persist([entry, ...notes]);
-      setUploadFileName('');
-      setUploading(false);
-      setSuccessMsg(`"${file.name}" uploaded successfully! Students can now download it.`);
-      setTimeout(() => setSuccessMsg(''), 5000);
-    };
-    reader.readAsDataURL(file);
+    if (file.type !== 'application/pdf') { setErrorMsg('Only PDF files are accepted.'); return; }
+    if (file.size > 20 * 1024 * 1024)   { setErrorMsg('File must be under 20 MB.'); return; }
+    setErrorMsg('');
+    setPendingFile(file);
+    setPendingTitle(file.name.replace(/\.pdf$/i, ''));
   }
 
   function handleDrop(e) {
     e.preventDefault();
     setDragging(false);
-    processFile(e.dataTransfer.files?.[0]);
+    stageFile(e.dataTransfer.files?.[0]);
   }
 
   function handleInput(e) {
-    processFile(e.target.files?.[0]);
+    stageFile(e.target.files?.[0]);
     if (e.target) e.target.value = '';
   }
 
+  function cancelUpload() {
+    setPendingFile(null);
+    setPendingTitle('');
+    setModalError('');
+  }
+
+  /* Confirmed → actually POST to backend */
+  async function confirmUpload() {
+    if (!pendingFile) return;
+    setModalError('');
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append('file', pendingFile);
+      form.append('title', pendingTitle.trim() || pendingFile.name.replace(/\.pdf$/i, ''));
+      const res = await api.postForm(`/content/notes/${selectedClassId}`, form);
+      setNotes(prev => [res.data, ...prev]);
+      setPendingFile(null);
+      setPendingTitle('');
+      setModalError('');
+      setSuccessMsg(`"${pendingFile.name}" uploaded successfully! Students can now download it.`);
+      setTimeout(() => setSuccessMsg(''), 5000);
+    } catch (err) {
+      setModalError(err.message || 'Upload failed. Please try again.');
+    } finally {
+      setUploading(false);
+    }
+  }
+
   function handleDownload(note) {
+    const url = `${SERVER_URL}${note.fileUrl}`;
     const a = document.createElement('a');
-    a.href = note.fileData;
+    a.href = url;
     a.download = note.fileName;
+    a.target = '_blank';
     a.click();
   }
 
-  function handleDelete(id) {
-    if (!window.confirm('Delete this file? Students will no longer be able to download it.')) return;
-    persist(notes.filter(n => n.id !== id));
-  }
-
-  /* Total notes across all my classes (for stats) */
-  const totalNotes = myClasses.reduce((acc, cls) => {
+  async function handleDelete(note) {
+    if (!window.confirm(`Delete "${note.title || note.fileName}"? Students will no longer be able to download it.`)) return;
+    setDeletingId(note._id);
     try {
-      const raw = localStorage.getItem(`kuppi_notes_${cls.id}`);
-      return acc + (raw ? JSON.parse(raw).length : 0);
-    } catch { return acc; }
-  }, 0);
+      await api.delete(`/content/notes/${note._id}`);
+      setNotes(prev => prev.filter(n => n._id !== note._id));
+    } catch (err) {
+      setErrorMsg(err.message || 'Delete failed.');
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   const selectedClass = myClasses.find(c => String(c.id) === String(selectedClassId));
 
@@ -123,8 +146,8 @@ export default function UploadNotesPage() {
       {/* Stats row */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-8">
         {[
-          { icon: '📚', label: 'My Classes', value: myClasses.length },
-          { icon: '📄', label: 'Total Files', value: totalNotes },
+          { icon: '📚', label: 'My Classes',    value: myClasses.length },
+          { icon: '📄', label: 'Files (class)',  value: selectedClassId ? notes.length : '—' },
           { icon: '🎓', label: 'Students Access', value: 'Live' },
         ].map(s => (
           <div key={s.label} className="bg-white border border-rim rounded-2xl p-5 flex items-center gap-4 hover:border-primary/30 hover:shadow-[0_4px_20px_rgba(14,165,233,0.08)] hover:-translate-y-0.5 transition-all">
@@ -180,6 +203,14 @@ export default function UploadNotesPage() {
             </div>
           )}
 
+          {/* Error banner */}
+          {errorMsg && (
+            <div className="mb-4 flex items-center gap-3 px-5 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-err font-semibold shadow-sm">
+              <span>⚠</span> {errorMsg}
+              <button onClick={() => setErrorMsg('')} className="ml-auto text-err/60 hover:text-err text-lg leading-none">×</button>
+            </div>
+          )}
+
           {/* Upload dropzone */}
           <div className="bg-white border border-rim rounded-2xl p-6 shadow-sm mb-6">
             <h2 className="font-bold text-ink text-base mb-4">Upload PDF Notes</h2>
@@ -191,6 +222,8 @@ export default function UploadNotesPage() {
               className={`border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer select-none transition-all duration-200 ${
                 dragging
                   ? 'border-primary bg-sky-50 scale-[1.01]'
+                  : uploading
+                  ? 'border-primary/40 bg-sky-50/40 cursor-not-allowed'
                   : 'border-slate-200 hover:border-primary/50 hover:bg-sky-50/40'
               }`}
             >
@@ -204,8 +237,8 @@ export default function UploadNotesPage() {
               {uploading ? (
                 <div className="flex flex-col items-center gap-3">
                   <div className="w-12 h-12 border-[3px] border-primary/25 border-t-primary rounded-full animate-spin" />
-                  <p className="text-sm text-primary font-semibold">Uploading "{uploadFileName}"…</p>
-                  <p className="text-xs text-dim">Please wait</p>
+                  <p className="text-sm text-primary font-semibold">Uploading "{pendingFile?.name}"…</p>
+                  <p className="text-xs text-dim">Sending to server, please wait</p>
                 </div>
               ) : (
                 <>
@@ -231,7 +264,11 @@ export default function UploadNotesPage() {
               </span>
             </div>
 
-            {notes.length === 0 ? (
+            {loadingNotes ? (
+              <div className="flex justify-center py-10">
+                <div className="w-8 h-8 border-[3px] border-primary/25 border-t-primary rounded-full animate-spin" />
+              </div>
+            ) : notes.length === 0 ? (
               <div className="text-center py-12 text-dim">
                 <p className="text-4xl mb-3">📭</p>
                 <p className="text-sm font-medium">No files uploaded for this class yet.</p>
@@ -241,16 +278,16 @@ export default function UploadNotesPage() {
               <div className="space-y-3">
                 {notes.map(note => (
                   <div
-                    key={note.id}
+                    key={note._id}
                     className="flex items-center gap-4 p-4 bg-slate-50 border border-slate-100 rounded-xl hover:border-primary/20 hover:bg-sky-50/40 transition-all"
                   >
                     <div className="w-11 h-11 bg-red-50 border border-red-100 rounded-xl flex items-center justify-center shrink-0">
                       <PdfIcon />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-ink truncate">{note.fileName}</p>
+                      <p className="text-sm font-semibold text-ink truncate">{note.title || note.fileName}</p>
                       <p className="text-xs text-dim mt-0.5">
-                        {formatSize(note.size)} · Uploaded {note.uploadedAt}
+                        {formatSize(note.fileSize)} · {note.fileName} · {new Date(note.createdAt).toLocaleDateString()}
                       </p>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -258,13 +295,14 @@ export default function UploadNotesPage() {
                         onClick={() => handleDownload(note)}
                         className="flex items-center gap-1.5 text-xs text-primary font-bold px-3 py-1.5 bg-sky-50 border border-sky-200 rounded-lg hover:bg-primary hover:text-white hover:border-primary transition-all"
                       >
-                        ⬇&#xFE0E; Preview
+                        ⬇&#xFE0E; Download
                       </button>
                       <button
-                        onClick={() => handleDelete(note.id)}
-                        className="text-xs text-err font-medium px-3 py-1.5 rounded-lg hover:bg-red-50 border border-transparent hover:border-red-200 transition-all"
+                        onClick={() => handleDelete(note)}
+                        disabled={deletingId === note._id}
+                        className="text-xs text-err font-medium px-3 py-1.5 rounded-lg hover:bg-red-50 border border-transparent hover:border-red-200 transition-all disabled:opacity-40"
                       >
-                        Delete
+                        {deletingId === note._id ? '…' : 'Delete'}
                       </button>
                     </div>
                   </div>
@@ -273,6 +311,78 @@ export default function UploadNotesPage() {
             )}
           </div>
         </>
+      )}
+
+      {/* ── Upload Confirmation Modal ───────────────────────────────── */}
+      {pendingFile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-7">
+            {/* Header */}
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-11 h-11 bg-red-50 border border-red-100 rounded-xl flex items-center justify-center shrink-0">
+                <PdfIcon />
+              </div>
+              <div className="min-w-0">
+                <p className="font-bold text-ink text-base">Confirm Upload</p>
+                <p className="text-xs text-dim truncate">{pendingFile.name}</p>
+              </div>
+            </div>
+
+            {/* File info */}
+            <div className="bg-slate-50 border border-slate-100 rounded-xl px-4 py-3 mb-5 text-xs text-dim space-y-1">
+              <p>📄 <span className="font-medium text-ink">{pendingFile.name}</span></p>
+              <p>📦 Size: {formatSize(pendingFile.size)}</p>
+              <p>📚 Class: <span className="font-medium text-ink">{myClasses.find(c => String(c.id) === String(selectedClassId))?.title}</span></p>
+            </div>
+
+            {/* Editable title */}
+            <div className="mb-5">
+              <label className="block text-xs font-bold text-ink mb-1.5">
+                Display Title <span className="text-dim font-normal">(students will see this)</span>
+              </label>
+              <input
+                type="text"
+                value={pendingTitle}
+                onChange={e => setPendingTitle(e.target.value)}
+                className="w-full px-4 py-2.5 text-sm border border-slate-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 transition-all"
+                placeholder="e.g. Week 3 – Algebra Notes"
+              />
+            </div>
+
+            {/* Inline error inside modal */}
+            {modalError && (
+              <div className="mb-4 flex items-start gap-2 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-xs text-err font-semibold">
+                <span className="shrink-0 mt-0.5">⚠</span>
+                <span className="flex-1">{modalError}</span>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <button
+                onClick={cancelUpload}
+                disabled={uploading}
+                className="flex-1 px-4 py-2.5 border border-slate-200 text-sub text-sm font-semibold rounded-xl hover:bg-slate-50 transition-all disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmUpload}
+                disabled={uploading}
+                className="flex-1 px-4 py-2.5 bg-primary hover:bg-primary-dark text-white text-sm font-bold rounded-xl transition-all shadow-sm hover:shadow-[0_4px_14px_rgba(14,165,233,0.35)] disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {uploading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Uploading…
+                  </>
+                ) : (
+                  '⬆ Upload Now'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -10,6 +10,7 @@ import LandingPage from './features/landing/pages/LandingPage';
 import AnnouncementsPage from './features/landing/pages/AnnouncementsPage';
 import Home from './features/landing/pages/Home';
 import ClassDetails from './features/landing/pages/ClassDetails';
+import PastClassesPage from './features/student/pages/PastClassesPage';
 
 // Conductor — new feature set
 import ConductorLayout from './features/conductor/layouts/ConductorLayout';
@@ -21,6 +22,7 @@ import CreateAnnouncement from './features/conductor/pages/CreateAnnouncement';
 import StudentsList from './features/conductor/pages/StudentsList';
 import Profile from './features/conductor/pages/Profile';
 import UploadNotesPage from './features/conductor/pages/UploadNotesPage';
+import ClassRequestsPage from './features/conductor/pages/ClassRequestsPage';
 
 // Student (Member 3)
 import StudentHome from './features/student/pages/StudentHome';
@@ -28,6 +30,7 @@ import StudentRegistrationPage from './features/student/pages/StudentRegistratio
 import MyClasses from './features/student/pages/MyClasses';
 import StudentProfile from './features/student/pages/StudentProfile';
 import StudentLayout from './features/student/layouts/StudentLayout';
+import MyRequests from './features/student/pages/MyRequests';
 
 // Content (Member 4)
 import ContentPage from './features/content/pages/ContentPage';
@@ -41,7 +44,7 @@ import ProtectedRoute from './layouts/ProtectedRoute';
 function PublicRoute({ children }) {
   const { user } = useAuth();
   if (user) {
-    return <Navigate to={user.role === 'conductor' ? '/' : '/student'} replace />;
+    return <Navigate to={user.role === 'conductor' ? '/conductor' : '/student'} replace />;
   }
   return children;
 }
@@ -53,8 +56,7 @@ function App() {
         {/* ── Public routes ── */}
         <Route path="/" element={<Home />} />
         <Route path="/landing" element={<LandingPage />} />
-        <Route path="/announcements" element={<AnnouncementsPage />} />
-        <Route path="/class/:id" element={<ClassDetails />} />
+        <Route path="/announcements" element={<AnnouncementsPage />} />        <Route path="/past-classes" element={<PastClassesPage />} />        <Route path="/class/:id" element={<ClassDetails />} />
 
         {/* ── Auth (blocked when logged in) ── */}
         <Route path="/login"    element={<PublicRoute><LoginPage /></PublicRoute>} />
@@ -68,6 +70,7 @@ function App() {
           <Route index element={<StudentHome />} />
           <Route path="classes"   element={<StudentRegistrationPage />} />
           <Route path="myclasses" element={<MyClasses />} />
+          <Route path="requests"  element={<MyRequests />} />
           <Route path="profile"   element={<StudentProfile />} />
           <Route path="content"   element={<ContentPage />} />
           <Route path="reviews"   element={<ReviewsPage />} />
@@ -83,6 +86,7 @@ function App() {
           <Route path="classes"       element={<ClassList />} />
           <Route path="create"        element={<CreateClass />} />
           <Route path="edit/:id"      element={<EditClass />} />
+          <Route path="requests"      element={<ClassRequestsPage />} />
           <Route path="announcements" element={<CreateAnnouncement />} />
           <Route path="students"      element={<StudentsList />} />
           <Route path="notes"         element={<UploadNotesPage />} />

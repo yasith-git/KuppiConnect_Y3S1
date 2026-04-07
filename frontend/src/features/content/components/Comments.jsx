@@ -1,9 +1,12 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../../auth/AuthContext';
+import { api } from '../../../services/api';
+
+const SERVER_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace('/api', '');
 
 /* ── Helpers ── */
-function timeAgo(ts) {
-  const diff = Date.now() - ts;
+function timeAgo(dateStr) {
+  const diff = Date.now() - new Date(dateStr).getTime();
   const m = Math.floor(diff / 60000);
   if (m < 1) return 'just now';
   if (m < 60) return `${m}m ago`;
@@ -48,41 +51,51 @@ function Avatar({ name, role, size = 9 }) {
 /* ── Comment Input Box ── */
 function CommentInput({ onPost, placeholder = 'Share your thoughts about this class...', autoFocus = false, compact = false }) {
   const { user } = useAuth();
-  const [text, setText] = useState('');
-  const [image, setImage] = useState(null);
-  const [imgName, setImgName] = useState('');
-  const [posting, setPosting] = useState(false);
+  const [text, setText]             = useState('');
+  const [imageFile, setImageFile]   = useState(null);
+  const [imgPreview, setImgPreview] = useState('');
+  const [posting, setPosting]       = useState(false);
+  const [error, setError]           = useState('');
   const fileRef = useRef();
 
   function handleImageSelect(e) {
     const file = e.target.files?.[0];
     if (!file || !file.type.startsWith('image/')) return;
-    if (file.size > 5 * 1024 * 1024) { alert('Image must be under 5MB.'); return; }
-    setImgName(file.name);
-    const reader = new FileReader();
-    reader.onload = ev => setImage(ev.target.result);
-    reader.readAsDataURL(file);
+    if (file.size > 5 * 1024 * 1024) { setError('Image must be under 5MB.'); return; }
+    setError('');
+    if (imgPreview) URL.revokeObjectURL(imgPreview);
+    setImageFile(file);
+    setImgPreview(URL.createObjectURL(file));
   }
 
-  function removeImage() { setImage(null); setImgName(''); if (fileRef.current) fileRef.current.value = ''; }
+  function removeImage() {
+    if (imgPreview) URL.revokeObjectURL(imgPreview);
+    setImageFile(null);
+    setImgPreview('');
+    if (fileRef.current) fileRef.current.value = '';
+  }
 
-  function handlePost() {
-    if (!text.trim() && !image) return;
+  async function handlePost() {
+    if (!text.trim() && !imageFile) return;
     setPosting(true);
-    setTimeout(() => {
-      onPost({ text: text.trim(), image });
+    setError('');
+    try {
+      await onPost({ text: text.trim(), imageFile });
       setText('');
       removeImage();
+    } catch (err) {
+      setError(err.message || 'Failed to post. Please try again.');
+    } finally {
       setPosting(false);
-    }, 350);
+    }
   }
 
   if (!user) return null;
 
   return (
-    <div className={`flex gap-3 ${compact ? '' : ''}`}>
+    <div className="flex gap-3">
       <Avatar name={user.name} role={user.role} size={compact ? 8 : 9} />
-      <div className="flex-1">
+      <div className="flex-1 min-w-0">
         <textarea
           value={text}
           onChange={e => setText(e.target.value)}
@@ -92,29 +105,30 @@ function CommentInput({ onPost, placeholder = 'Share your thoughts about this cl
           onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handlePost(); }}
           className="w-full px-4 py-3 text-sm border border-slate-200 rounded-xl focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 resize-none transition-all placeholder:text-slate-400"
         />
-        {image && (
+        {imgPreview && (
           <div className="mt-2 relative inline-block">
-            <img src={image} alt="preview" className="h-24 rounded-xl border border-slate-200 object-cover shadow-sm" />
+            <img src={imgPreview} alt="preview" className="h-24 rounded-xl border border-slate-200 object-cover shadow-sm" />
             <button
               onClick={removeImage}
               className="absolute -top-2 -right-2 w-5 h-5 bg-err text-white rounded-full text-xs flex items-center justify-center hover:bg-red-700 transition-colors shadow"
             >×</button>
           </div>
         )}
+        {error && <p className="text-xs text-err mt-1.5">⚠ {error}</p>}
         <div className="flex items-center justify-between mt-2.5 gap-2">
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
             className="flex items-center gap-1.5 text-xs text-dim hover:text-primary transition-colors px-3 py-1.5 rounded-lg hover:bg-sky-50 border border-slate-200 hover:border-sky-200"
           >
-            🖼️ {imgName ? <span className="max-w-[120px] truncate">{imgName}</span> : 'Attach Image'}
+            🖼️ {imageFile ? <span className="max-w-[120px] truncate">{imageFile.name}</span> : 'Attach Image'}
           </button>
           <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
           <div className="flex items-center gap-2">
             <span className="text-[11px] text-dim hidden sm:block">Ctrl+Enter to post</span>
             <button
               onClick={handlePost}
-              disabled={(!text.trim() && !image) || posting}
+              disabled={(!text.trim() && !imageFile) || posting}
               className="px-5 py-1.5 bg-primary hover:bg-primary-dark text-white text-xs font-bold rounded-lg transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {posting ? 'Posting…' : 'Post'}
@@ -127,38 +141,45 @@ function CommentInput({ onPost, placeholder = 'Share your thoughts about this cl
 }
 
 /* ── Single Comment Card ── */
-function CommentCard({ comment, conductorId, onReply, depth = 0 }) {
-  const { user } = useAuth();
+function CommentCard({ comment, classId, currentUserId, currentUserRole, onReply, onDelete, depth = 0 }) {
   const [showReply, setShowReply] = useState(false);
-  const isOwnComment = user?.id === comment.authorId;
+  const isAuthor  = currentUserId && String(comment.author?._id) === String(currentUserId);
+  const canReply  = !!currentUserId && depth < 2;
+  /* Only the comment author can delete their own comment */
+  const canDelete = depth === 0 && isAuthor;
+
+  async function handleReplyPost(data) {
+    await onReply(comment._id, data);
+    setShowReply(false);
+  }
 
   return (
     <div className={depth > 0 ? 'ml-10 sm:ml-12 pl-4 border-l-2 border-sky-100' : ''}>
       <div className="flex gap-3">
-        <Avatar name={comment.authorName} role={comment.authorRole} />
+        <Avatar name={comment.author?.name} role={comment.author?.role} />
         <div className="flex-1 min-w-0">
           {/* Bubble */}
           <div className="bg-slate-50 border border-slate-100 rounded-2xl px-4 py-3">
             <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
-              <span className="text-xs font-bold text-ink">{comment.authorName}</span>
-              {comment.authorRole === 'conductor' && (
+              <span className="text-xs font-bold text-ink">{comment.author?.name}</span>
+              {comment.author?.role === 'conductor' && (
                 <span className="bg-amber-50 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-200 leading-none">
                   Conductor
                 </span>
               )}
-              {isOwnComment && (
+              {isAuthor && (
                 <span className="bg-sky-50 text-primary text-[10px] font-bold px-2 py-0.5 rounded-full border border-sky-200 leading-none">
                   You
                 </span>
               )}
-              <span className="text-[11px] text-dim ml-auto">{timeAgo(comment.timestamp)}</span>
+              <span className="text-[11px] text-dim ml-auto">{timeAgo(comment.createdAt)}</span>
             </div>
             {comment.text && (
               <p className="text-sm text-sub leading-relaxed whitespace-pre-wrap">{comment.text}</p>
             )}
             {comment.image && (
               <img
-                src={comment.image}
+                src={comment.image.startsWith('http') ? comment.image : `${SERVER_URL}${comment.image}`}
                 alt="attachment"
                 className="mt-2.5 max-h-52 max-w-full rounded-xl border border-slate-200 object-cover"
               />
@@ -166,23 +187,33 @@ function CommentCard({ comment, conductorId, onReply, depth = 0 }) {
           </div>
 
           {/* Actions */}
-          {user && depth < 2 && (
-            <button
-              onClick={() => setShowReply(v => !v)}
-              className="text-[11px] text-dim hover:text-primary font-semibold mt-1.5 ml-1 transition-colors"
-            >
-              {showReply ? 'Cancel' : '↩ Reply'}
-            </button>
-          )}
+          <div className="flex items-center gap-3 mt-1.5 ml-1">
+            {canReply && (
+              <button
+                onClick={() => setShowReply(v => !v)}
+                className="text-[11px] text-dim hover:text-primary font-semibold transition-colors"
+              >
+                {showReply ? 'Cancel' : '↩ Reply'}
+              </button>
+            )}
+            {canDelete && (
+              <button
+                onClick={() => onDelete(comment._id)}
+                className="text-[11px] text-dim hover:text-err font-semibold transition-colors"
+              >
+                Delete
+              </button>
+            )}
+          </div>
 
           {/* Reply input */}
           {showReply && (
             <div className="mt-3">
               <CommentInput
-                placeholder={`Reply to ${comment.authorName}…`}
+                placeholder={`Reply to ${comment.author?.name}…`}
                 autoFocus
                 compact
-                onPost={data => { onReply(comment.id, data); setShowReply(false); }}
+                onPost={handleReplyPost}
               />
             </div>
           )}
@@ -192,10 +223,13 @@ function CommentCard({ comment, conductorId, onReply, depth = 0 }) {
             <div className="mt-4 space-y-4">
               {comment.replies.map(reply => (
                 <CommentCard
-                  key={reply.id}
+                  key={reply._id}
                   comment={reply}
-                  conductorId={conductorId}
+                  classId={classId}
+                  currentUserId={currentUserId}
+                  currentUserRole={currentUserRole}
                   onReply={onReply}
+                  onDelete={onDelete}
                   depth={depth + 1}
                 />
               ))}
@@ -210,68 +244,63 @@ function CommentCard({ comment, conductorId, onReply, depth = 0 }) {
 /* ── Main Comments Component ── */
 export default function Comments({ classId, conductorId }) {
   const { user } = useAuth();
-  const [comments, setComments] = useState([]);
+  const [comments, setComments]       = useState([]);
+  const [loading, setLoading]         = useState(true);
+  const [fetchError, setFetchError]   = useState(''); // '' | 'auth' | 'access' | message
+  const [actionError, setActionError] = useState('');
 
-  useEffect(() => {
+  const currentUserId   = user?.id?.toString() ?? user?._id?.toString();
+  const currentUserRole = user?.role;
+
+  /* ── Fetch comments from backend ── */
+  const loadComments = useCallback(async () => {
+    if (!classId) return;
+    if (!user) { setLoading(false); return; }
+    setLoading(true);
+    setFetchError('');
     try {
-      const raw = localStorage.getItem(`kuppi_comments_${classId}`);
-      if (raw) setComments(JSON.parse(raw));
-    } catch { /* silent */ }
-  }, [classId]);
+      const res = await api.get(`/content/comments/${classId}`);
+      setComments(res.data ?? []);
+    } catch (err) {
+      if (err.statusCode === 401) setFetchError('auth');
+      else if (err.statusCode === 403) setFetchError('access');
+      else setFetchError(err.message || 'Failed to load comments');
+    } finally {
+      setLoading(false);
+    }
+  }, [classId, user]);
 
-  function persist(updated) {
-    setComments(updated);
-    localStorage.setItem(`kuppi_comments_${classId}`, JSON.stringify(updated));
+  useEffect(() => { loadComments(); }, [loadComments]);
+
+  /* ── Post new top-level comment ── */
+  async function handlePost({ text, imageFile }) {
+    const form = new FormData();
+    if (text) form.append('text', text);
+    if (imageFile) form.append('image', imageFile);
+    const res = await api.postForm(`/content/comments/${classId}`, form);
+    setComments(prev => [res.data, ...prev]);
   }
 
-  function handlePost({ text, image }) {
-    const entry = {
-      id: Date.now(),
-      classId,
-      authorId: user.id,
-      authorName: user.name,
-      authorRole: user.role,
-      text,
-      image,
-      timestamp: Date.now(),
-      replies: [],
-    };
-    persist([entry, ...comments]);
-    if (user.role !== 'conductor') {
-      pushNotification(conductorId, classId, user.name, text);
-    }
+  /* ── Post reply — backend returns the updated parent comment ── */
+  async function handleReply(commentId, { text, imageFile }) {
+    const form = new FormData();
+    if (text) form.append('text', text);
+    if (imageFile) form.append('image', imageFile);
+    const res = await api.postForm(`/content/comments/${classId}/${commentId}/reply`, form);
+    setComments(prev => prev.map(c =>
+      String(c._id) === String(commentId) ? res.data : c
+    ));
   }
 
-  function handleReply(parentId, { text, image }) {
-    function addReplyTo(list) {
-      return list.map(c => {
-        if (c.id === parentId) {
-          return {
-            ...c,
-            replies: [
-              ...(c.replies || []),
-              {
-                id: Date.now(),
-                classId,
-                authorId: user.id,
-                authorName: user.name,
-                authorRole: user.role,
-                text,
-                image,
-                timestamp: Date.now(),
-                replies: [],
-                parentId,
-              },
-            ],
-          };
-        }
-        if (c.replies?.length) return { ...c, replies: addReplyTo(c.replies) };
-        return c;
-      });
-    }
-    persist(addReplyTo(comments));
-    if (user.role !== 'conductor') {
-      pushNotification(conductorId, classId, user.name, text);
+  /* ── Delete top-level comment ── */
+  async function handleDelete(commentId) {
+    if (!window.confirm('Delete this comment?')) return;
+    setActionError('');
+    try {
+      await api.delete(`/content/comments/${classId}/${commentId}`);
+      setComments(prev => prev.filter(c => String(c._id) !== String(commentId)));
+    } catch (err) {
+      setActionError(err.message || 'Failed to delete comment');
     }
   }
 
@@ -294,36 +323,82 @@ export default function Comments({ classId, conductorId }) {
         </span>
       </div>
 
-      {/* Input */}
-      {user ? (
-        <div className="mb-8">
-          <CommentInput onPost={handlePost} />
-        </div>
-      ) : (
-        <div className="mb-6 p-4 bg-sky-50 border border-sky-200 rounded-xl text-sm text-sub text-center">
-          <a href="/login" className="text-primary font-semibold hover:underline">Sign in</a>
-          {' '}to join the discussion.
+      {/* Not logged in */}
+      {!user && (
+        <div className="text-center py-10 bg-slate-50 rounded-xl border border-slate-100">
+          <p className="text-4xl mb-3">💬</p>
+          <p className="text-sm text-sub">
+            <a href="/login" className="text-primary font-semibold hover:underline">Sign in</a>
+            {' '}to view and join the class discussion.
+          </p>
         </div>
       )}
 
-      {/* Comments list */}
-      {comments.length === 0 ? (
-        <div className="text-center py-12 text-dim">
-          <p className="text-5xl mb-3">💭</p>
-          <p className="text-sm font-semibold text-ink">No comments yet.</p>
-          <p className="text-xs mt-1">Be the first to share your thoughts about this class!</p>
+      {/* Not enrolled / unauthorized */}
+      {user && fetchError === 'access' && (
+        <div className="text-center py-12 bg-slate-50 rounded-xl border border-slate-100">
+          <p className="text-4xl mb-3">🔒</p>
+          <p className="text-sm font-semibold text-ink mb-1">Enroll to join the discussion</p>
+          <p className="text-xs text-dim">Register for this class to view and post in the discussion board.</p>
         </div>
-      ) : (
-        <div className="space-y-6">
-          {comments.map(c => (
-            <CommentCard
-              key={c.id}
-              comment={c}
-              conductorId={conductorId}
-              onReply={handleReply}
-            />
-          ))}
+      )}
+
+      {/* Other fetch error */}
+      {user && fetchError && fetchError !== 'access' && (
+        <div className="flex items-center gap-2 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-err">
+          <span>⚠</span>
+          <span>{fetchError === 'auth' ? 'Session expired. Please sign in again.' : fetchError}</span>
         </div>
+      )}
+
+      {/* Loading */}
+      {user && !fetchError && loading && (
+        <div className="flex justify-center py-12">
+          <div className="w-8 h-8 border-[3px] border-primary/25 border-t-primary rounded-full animate-spin" />
+        </div>
+      )}
+
+      {/* Main content */}
+      {user && !fetchError && !loading && (
+        <>
+          {actionError && (
+            <div className="mb-4 flex items-center gap-2 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-err">
+              <span>⚠</span> {actionError}
+              <button onClick={() => setActionError('')} className="ml-auto text-err/60 hover:text-err text-lg leading-none">×</button>
+            </div>
+          )}
+
+          {/* Input */}
+          <div className="mb-8">
+            <CommentInput onPost={handlePost} />
+          </div>
+
+          {/* Empty state */}
+          {comments.length === 0 && (
+            <div className="text-center py-12 text-dim">
+              <p className="text-5xl mb-3">💭</p>
+              <p className="text-sm font-semibold text-ink">No comments yet.</p>
+              <p className="text-xs mt-1">Be the first to share your thoughts about this class!</p>
+            </div>
+          )}
+
+          {/* Comment list */}
+          {comments.length > 0 && (
+            <div className="space-y-6">
+              {comments.map(c => (
+                <CommentCard
+                  key={c._id}
+                  comment={c}
+                  classId={classId}
+                  currentUserId={currentUserId}
+                  currentUserRole={currentUserRole}
+                  onReply={handleReply}
+                  onDelete={handleDelete}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

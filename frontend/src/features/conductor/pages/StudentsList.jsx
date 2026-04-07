@@ -2,8 +2,30 @@ import { useState, useMemo } from 'react';
 import { useAuth } from '../../auth/AuthContext';
 import { useClasses } from '../../../contexts/ClassesContext';
 import { useEnrollments } from '../../../contexts/EnrollmentsContext';
-import { dummyEnrollments } from '../../../data/dummyData';
 
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
+function getToken() {
+  try {
+    const data = localStorage.getItem('kuppi_auth');
+    return data ? JSON.parse(data).token : null;
+  } catch { return null; }
+}
+
+/** Download real Excel from the backend for a specific class */
+async function downloadExcelFromApi(classId, filename) {
+  const res = await fetch(`${BASE_URL}/registration/export/${classId}`, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+  });
+  if (!res.ok) throw new Error('Export failed');
+  const blob = await res.blob();
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+/** Fallback CSV (used when "All classes" is selected — no single-class API) */
 function downloadCSV(rows, filename) {
   const header = ['Name', 'Email', 'Phone', 'Class', 'Registered At'];
   const lines = [header, ...rows.map(r => [r.name, r.email, r.phone || '—', r.className, r.registeredAt])];
@@ -22,54 +44,59 @@ export default function StudentsList() {
 
   const [selectedClassId, setSelectedClassId] = useState('all');
 
+  const userId = user?.id?.toString() ?? user?._id?.toString();
   const myClasses = useMemo(
-    () => classes.filter(c => c.conductorId === user?.id),
-    [classes, user]
+    () => classes.filter(c => c.conductorId === userId),
+    [classes, userId]
   );
 
-  // Build full enrollment rows: merge dummy + real (context) enrollments, dedupe by classId+studentId
+  // Build enrollment rows from the context (no more dummy data)
   const allRows = useMemo(() => {
     const myIds = new Set(myClasses.map(c => c.id));
 
-    const toRow = (e) => {
-      const cls = myClasses.find(c => c.id === e.classId);
-      return {
-        classId:      e.classId,
-        className:    cls?.title ?? `Class #${e.classId}`,
-        subject:      cls?.subject ?? '',
-        name:         e.studentName,
-        email:        e.email,
-        phone:        e.phone || '—',
-        registeredAt: e.registeredAt,
-        _key:         `${e.classId}-${e.studentId ?? e.email}`,
-      };
-    };
-
-    const dummyRows = dummyEnrollments
-      .filter(e => myIds.has(e.classId))
-      .map(toRow);
-
-    const realRows = enrollments
-      .filter(e => myIds.has(e.classId))
-      .map(toRow);
-
-    // Merge: real enrollments override dummy ones with same key
-    const merged = new Map();
-    [...dummyRows, ...realRows].forEach(r => merged.set(r._key, r));
-    return Array.from(merged.values());
+    return enrollments
+      .filter(e => myIds.has(e.classId?.toString?.() ?? e.classId))
+      .map(e => {
+        const cls = myClasses.find(c => c.id === (e.classId?.toString?.() ?? e.classId));
+        return {
+          classId:      e.classId,
+          className:    cls?.title ?? `Class #${e.classId}`,
+          subject:      cls?.subject ?? '',
+          name:         e.studentName,
+          email:        e.email,
+          phone:        e.phone || '—',
+          registeredAt: e.registeredAt,
+          _key:         `${e.classId}-${e.studentId ?? e.email}`,
+        };
+      });
   }, [myClasses, enrollments]);
 
   const filtered = useMemo(() => {
     if (selectedClassId === 'all') return allRows;
-    return allRows.filter(r => r.classId === Number(selectedClassId));
+    return allRows.filter(r => String(r.classId) === selectedClassId);
   }, [allRows, selectedClassId]);
 
-  function handleDownload() {
-    const filename =
-      selectedClassId === 'all'
-        ? 'all-students.csv'
-        : `students-class-${selectedClassId}.csv`;
-    downloadCSV(filtered, filename);
+  const [dlLoading, setDlLoading] = useState(false);
+  const [dlError,   setDlError]   = useState(null);
+
+  async function handleDownload() {
+    setDlError(null);
+    if (selectedClassId !== 'all') {
+      // Real Excel from API
+      setDlLoading(true);
+      try {
+        const cls = myClasses.find(c => String(c.id) === selectedClassId);
+        const filename = `students-${cls?.title?.replace(/\s+/g, '-') ?? selectedClassId}.xlsx`;
+        await downloadExcelFromApi(selectedClassId, filename);
+      } catch (e) {
+        setDlError('Export failed. Please try again.');
+      } finally {
+        setDlLoading(false);
+      }
+    } else {
+      // All-classes fallback: CSV from local state
+      downloadCSV(filtered, 'all-students.csv');
+    }
   }
 
   return (
@@ -104,9 +131,9 @@ export default function StudentsList() {
               >
                 <option value="all">All my classes ({allRows.length} students)</option>
                 {myClasses.map(c => {
-                  const count = allRows.filter(r => r.classId === c.id).length;
+                  const count = allRows.filter(r => String(r.classId) === String(c.id)).length;
                   return (
-                    <option key={c.id} value={c.id}>
+                    <option key={c.id} value={String(c.id)}>
                       {c.title} ({count})
                     </option>
                   );
@@ -115,19 +142,23 @@ export default function StudentsList() {
             </div>
 
             {/* Download button */}
-            <button
-              onClick={handleDownload}
-              disabled={filtered.length === 0}
-              className="flex items-center gap-2 bg-ok hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-bold px-5 py-2.5 rounded-xl transition-all shadow-sm hover:shadow-[0_4px_14px_rgba(5,150,105,0.35)]"
-            >
-              <span>📥</span> Download Excel / CSV
-            </button>
+            <div className="flex flex-col items-end gap-1">
+              <button
+                onClick={handleDownload}
+                disabled={filtered.length === 0 || dlLoading}
+                className="flex items-center gap-2 bg-ok hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-bold px-5 py-2.5 rounded-xl transition-all shadow-sm hover:shadow-[0_4px_14px_rgba(5,150,105,0.35)]"
+              >
+                <span>📥</span>
+                {dlLoading ? 'Exporting...' : selectedClassId === 'all' ? 'Download CSV' : 'Download Excel'}
+              </button>
+              {dlError && <p className="text-err text-xs">{dlError}</p>}
+            </div>
           </div>
 
           {/* Summary cards per class */}
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-6">
             {myClasses.map(c => {
-              const count = allRows.filter(r => r.classId === c.id).length;
+              const count = allRows.filter(r => String(r.classId) === String(c.id)).length;
               const pct = Math.min(100, (count / Math.max(1, c.seats)) * 100);
               return (
                 <button
@@ -159,7 +190,7 @@ export default function StudentsList() {
               <h2 className="font-bold text-ink text-base">
                 {selectedClassId === 'all'
                   ? `All Students (${filtered.length})`
-                  : `${myClasses.find(c => c.id === Number(selectedClassId))?.title} — ${filtered.length} students`}
+                  : `${myClasses.find(c => String(c.id) === selectedClassId)?.title} — ${filtered.length} students`}
               </h2>
             </div>
 

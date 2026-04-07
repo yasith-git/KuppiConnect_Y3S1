@@ -1,15 +1,17 @@
 import { useState, useEffect } from 'react';
 import { Outlet, NavLink, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
+import { useClassRequests } from '../../../contexts/ClassRequestContext';
 
 const NAV = [
-  { to: '/conductor/dashboard',     icon: '🏠', label: 'Dashboard',       notifKey: 'dashboard' },
-  { to: '/conductor/classes',       icon: '📚', label: 'My Classes' },
-  { to: '/conductor/create',        icon: '➕', label: 'Create Class' },
+  { to: '/conductor/dashboard',     icon: '🏠', label: 'Dashboard'     },
+  { to: '/conductor/classes',       icon: '📚', label: 'My Classes'    },
+  { to: '/conductor/create',        icon: '➕', label: 'Create Class'  },
+  { to: '/conductor/requests',      icon: '💡', label: 'Requests',      requestBadge: true },
   { to: '/conductor/announcements', icon: '📢', label: 'Announcements' },
-  { to: '/conductor/notes',         icon: '📄', label: 'Upload Notes' },
-  { to: '/conductor/students',      icon: '👥', label: 'Students' },
-  { to: '/conductor/profile',       icon: '👤', label: 'Profile' },
+  { to: '/conductor/notes',         icon: '📄', label: 'Upload Notes'  },
+  { to: '/conductor/students',      icon: '👥', label: 'Students'      },
+  { to: '/conductor/profile',       icon: '👤', label: 'Profile'       },
 ];
 
 /** Read unread notification count for this conductor from localStorage */
@@ -32,7 +34,7 @@ function useNotifCount(userId) {
   return count;
 }
 
-function SidebarContent({ user, onLogout, onClose, notifCount }) {
+function SidebarContent({ user, onLogout, onClose, pendingRequestCount }) {
   return (
     <aside className="w-60 bg-white border-r border-sky-100 flex flex-col h-full">
       {/* Brand */}
@@ -75,9 +77,9 @@ function SidebarContent({ user, onLogout, onClose, notifCount }) {
           >
             <span className="text-base leading-none">{item.icon}</span>
             <span className="flex-1">{item.label}</span>
-            {item.notifKey === 'dashboard' && notifCount > 0 && (
-              <span className="min-w-[20px] h-5 px-1 bg-err text-white text-[10px] font-bold rounded-full flex items-center justify-center leading-none">
-                {notifCount > 9 ? '9+' : notifCount}
+            {item.requestBadge && pendingRequestCount > 0 && (
+              <span className="min-w-[20px] h-5 px-1 bg-violet-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center leading-none">
+                {pendingRequestCount > 9 ? '9+' : pendingRequestCount}
               </span>
             )}
           </NavLink>
@@ -110,7 +112,7 @@ export default function ConductorLayout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const notifCount = useNotifCount(user?.id);
+  const { pendingCount } = useClassRequests();
 
   function handleLogout() {
     logout();
@@ -122,7 +124,7 @@ export default function ConductorLayout() {
 
       {/* ── Desktop: fixed sidebar ── */}
       <div className="hidden lg:flex lg:fixed lg:inset-y-0 lg:left-0 lg:w-60 z-30 shadow-sm">
-        <SidebarContent user={user} onLogout={handleLogout} onClose={undefined} notifCount={notifCount} />
+        <SidebarContent user={user} onLogout={handleLogout} onClose={undefined} pendingRequestCount={pendingCount} />
       </div>
 
       {/* ── Mobile: slide-over sidebar ── */}
@@ -137,7 +139,7 @@ export default function ConductorLayout() {
               user={user}
               onLogout={handleLogout}
               onClose={() => setSidebarOpen(false)}
-              notifCount={notifCount}
+              pendingRequestCount={pendingCount}
             />
           </div>
         </div>

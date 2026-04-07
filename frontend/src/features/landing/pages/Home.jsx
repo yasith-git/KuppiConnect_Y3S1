@@ -7,7 +7,8 @@ import { useAnnouncements } from '../../../contexts/AnnouncementsContext';
 const today = new Date().toISOString().split('T')[0];
 
 function isActive(ann) {
-  return ann.startDate <= today && ann.endDate >= today;
+  const now = new Date();
+  return new Date(ann.startDate) <= now && new Date(ann.endDate) >= now;
 }
 
 const ALL_SUBJECTS = [
@@ -41,9 +42,9 @@ function AnnouncementCard({ ann }) {
         <h3 className="font-bold text-ink text-sm mb-2 leading-snug">{ann.title}</h3>
         <p className="text-dim text-xs leading-relaxed mb-4 flex-1 line-clamp-3">{ann.description}</p>
         <div className="flex items-center justify-between text-[11px] text-dim border-t border-slate-100 pt-3">
-          <span>📅 From {ann.startDate}</span>
+          <span>📅 {new Date(ann.startDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
           <span className="bg-green-50 text-ok font-semibold px-2.5 py-0.5 rounded-full border border-green-100">
-            Until {ann.endDate}
+            Until {new Date(ann.endDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
           </span>
         </div>
       </div>
@@ -108,7 +109,7 @@ function ClassCard({ cls }) {
 export default function Home() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const { classes } = useClasses();
+  const { upcomingClasses } = useClasses();
   const { announcements } = useAnnouncements();
 
   const [search, setSearch] = useState('');
@@ -117,15 +118,15 @@ export default function Home() {
 
   const activeAnnouncements = useMemo(() => announcements.filter(isActive), [announcements]);
 
-  // Build subject list dynamically from current classes
+  // Build subject list from upcoming classes only
   const SUBJECTS = useMemo(
-    () => ['All Modules', ...Array.from(new Set(classes.map(c => c.subject))).filter(Boolean).sort()],
-    [classes]
+    () => ['All Modules', ...Array.from(new Set(upcomingClasses.map(c => c.subject))).filter(Boolean).sort()],
+    [upcomingClasses]
   );
 
   const filteredClasses = useMemo(() => {
     const q = search.toLowerCase().trim();
-    return classes.filter(c => {
+    return upcomingClasses.filter(c => {
       const matchQ = !q || c.title.toLowerCase().includes(q)
         || (c.conductor ?? '').toLowerCase().includes(q)
         || (c.subject ?? '').toLowerCase().includes(q);
@@ -133,7 +134,7 @@ export default function Home() {
       const matchD = !date || c.date === date;
       return matchQ && matchS && matchD;
     });
-  }, [classes, search, subject, date]);
+  }, [upcomingClasses, search, subject, date]);
 
   const hasFilter = search || subject !== 'All Modules' || date;
 
@@ -295,12 +296,18 @@ export default function Home() {
           {filteredClasses.length === 0 ? (
             <div className="text-center py-20 bg-sky-50 rounded-2xl border border-sky-100">
               <span className="text-5xl mb-4 block">🔍</span>
-              <h3 className="font-bold text-ink text-lg mb-2">No classes found</h3>
-              <p className="text-sub text-sm mb-6">Try adjusting your search or clearing the filters.</p>
-              <button onClick={clearFilters}
-                className="bg-primary hover:bg-primary-dark text-white text-sm font-semibold px-6 py-2.5 rounded-full transition-all shadow-sm">
-                Show All Classes
-              </button>
+              <h3 className="font-bold text-ink text-lg mb-2">No upcoming classes found</h3>
+              <p className="text-sub text-sm mb-4">Try adjusting your search or clearing the filters.</p>
+              <div className="flex items-center justify-center gap-3 flex-wrap">
+                <button onClick={clearFilters}
+                  className="bg-primary hover:bg-primary-dark text-white text-sm font-semibold px-6 py-2.5 rounded-full transition-all shadow-sm">
+                  Show All Upcoming
+                </button>
+                <Link to="/past-classes"
+                  className="border border-slate-300 text-sub hover:text-ink text-sm font-semibold px-6 py-2.5 rounded-full transition-all">
+                  Browse Past Classes →
+                </Link>
+              </div>
             </div>
           ) : (
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -320,6 +327,7 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-5 text-xs text-dim">
             <Link to="/" className="hover:text-ink transition-colors">Home</Link>
+            <Link to="/past-classes" className="hover:text-ink transition-colors">Past Classes</Link>
             {!user && <Link to="/login" className="hover:text-ink transition-colors">Sign In</Link>}
             {!user && <Link to="/register" className="hover:text-ink transition-colors">Register</Link>}
           </div>

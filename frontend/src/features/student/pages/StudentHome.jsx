@@ -1,12 +1,19 @@
-import { useState } from 'react';
+/**
+ * StudentHome — Member 3 (Registration feature)
+ *
+ * Main dashboard for logged-in students.
+ * Shows upcoming class reminders, stats, available classes,
+ * and a quick view of upcoming enrolled classes.
+ *
+ * NOTE: Meeting links are NEVER shown here.
+ * They are delivered to the student via email at registration time.
+ */
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { useClasses } from '../../../contexts/ClassesContext';
 import { useAnnouncements } from '../../../contexts/AnnouncementsContext';
 import { useEnrollments } from '../../../contexts/EnrollmentsContext';
-
-const today = new Date().toISOString().split('T')[0];
-const in2Days = new Date(Date.now() + 2 * 86400000).toISOString().split('T')[0];
 
 function ReminderEmailModal({ enrollment, onClose }) {
   return (
@@ -27,15 +34,16 @@ function ReminderEmailModal({ enrollment, onClose }) {
             <p><span className="font-bold text-ink w-16 inline-block">To:</span><span className="text-dim">{enrollment.email}</span></p>
             <p><span className="font-bold text-ink w-16 inline-block">Subject:</span><span className="text-dim">Class Reminder – {enrollment.classTitle}</span></p>
           </div>
+          {/* Reminder email preview — classLocation is safe to display (never a raw URL) */}
           <pre className="text-xs text-sub leading-relaxed whitespace-pre-wrap font-sans border-l-2 border-amber-400 pl-4">{`Dear ${enrollment.studentName},
 
 This is a friendly reminder that your upcoming class is soon:
 
-Class: ${enrollment.classTitle}
-Subject: ${enrollment.classSubject}
-Date: ${enrollment.classDate} at ${enrollment.classTime}
+Class:     ${enrollment.classTitle}
+Subject:   ${enrollment.classSubject}
+Date:      ${enrollment.classDate} at ${enrollment.classTime}
 Conductor: ${enrollment.conductor}
-${enrollment.classMeetingLink ? `Meeting Link: ${enrollment.classMeetingLink}` : ''}
+Location:  ${enrollment.classLocation || 'See your registration confirmation email'}
 
 Please be prepared and join on time. Good luck!
 
@@ -53,21 +61,34 @@ KuppiConnect Team`}</pre>
 
 export default function StudentHome() {
   const { user } = useAuth();
-  const { classes } = useClasses();
+  const { classes, upcomingClasses } = useClasses();
   const { announcements } = useAnnouncements();
-  const { getStudentEnrollments } = useEnrollments();
+  const { registeredClasses, completedClasses, fetchMyClasses, getStudentEnrollments, fetchMyEnrollments } = useEnrollments();
   const [reminderModal, setReminderModal] = useState(null);
 
-  const myEnrollments = getStudentEnrollments(user?.id);
-  const upcoming = myEnrollments.filter(e => e.classDate >= today);
-  const completed = myEnrollments.filter(e => e.classDate < today);
-  const reminders = upcoming.filter(e => e.classDate <= in2Days);
+  // Sync from API on every mount so all counts are accurate
+  useEffect(() => {
+    fetchMyClasses();
+    if (user?.id) fetchMyEnrollments(user.id);
+  }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const activeAnnouncements = announcements.filter(a => a.startDate <= today && a.endDate >= today);
-  const myClassIds = new Set(myEnrollments.map(e => e.classId));
-  const featured = classes
-    .filter(c => !myClassIds.has(c.id) && c.date >= today && c.enrolled < c.seats)
-    .slice(0, 3);
+  const myEnrollments = getStudentEnrollments(user?.id);
+  const now = new Date();
+  const in2Days = new Date(Date.now() + 2 * 86_400_000);
+  // Use API-sourced split lists for display; fall back to local enrollments during first load
+  const registered  = registeredClasses.length ? registeredClasses : myEnrollments.filter(e => new Date(e.classDate) > now);
+  const completed   = completedClasses.length  ? completedClasses  : myEnrollments.filter(e => new Date(e.classDate) <= now);
+  const reminders   = registered.filter(e => new Date(e.classDate) <= in2Days);
+
+  const activeAnnouncements = announcements.filter(a => {
+    const n = new Date();
+    return new Date(a.startDate) <= n && new Date(a.endDate) >= n;
+  });
+  const myClassIds  = new Set(myEnrollments.map(e => e.classId));
+  // Upcoming = classes NOT yet registered by this student
+  const upcomingUnregistered = (upcomingClasses.length ? upcomingClasses : classes)
+    .filter(c => !myClassIds.has(String(c.id)));
+  const featured = upcomingUnregistered.slice(0, 3);
 
   return (
     <div className="max-w-5xl mx-auto space-y-7">
@@ -85,10 +106,9 @@ export default function StudentHome() {
           <p className="text-sky-100 text-sm font-medium mb-1">Welcome back,</p>
           <h1 className="text-3xl font-extrabold mb-2">{user?.name?.split(' ')[0]} 👋</h1>
           <p className="text-sky-100 text-sm max-w-md">
-            You have <strong className="text-white">{upcoming.length}</strong> upcoming class{upcoming.length !== 1 ? 'es' : ''} and{' '}
+            You have <strong className="text-white">{registered.length}</strong> registered class{registered.length !== 1 ? 'es' : ''} and{' '}
             <strong className="text-white">{completed.length}</strong> completed.
-          </p>
-          <div className="mt-5 flex gap-3 flex-wrap">
+          </p>          <div className="mt-5 flex gap-3 flex-wrap">
             <Link to="/student/classes"
               className="bg-white text-primary text-sm font-bold px-5 py-2.5 rounded-xl hover:bg-sky-50 transition-all shadow-sm">
               Browse Classes
@@ -113,9 +133,8 @@ export default function StudentHome() {
                   <p className="text-sm font-bold text-amber-900">{r.classTitle}</p>
                   <p className="text-xs text-amber-700 mt-0.5">
                     {r.classDate} at {r.classTime} · {r.conductor}
-                    {r.classMeetingLink && (
-                      <> · <a href={r.classMeetingLink} target="_blank" rel="noreferrer" className="underline font-medium">Join Link</a></>
-                    )}
+                    {/* Show safe location only — meeting links are sent via email */}
+                    {r.classLocation && <> · 📍 {r.classLocation}</>}
                   </p>
                 </div>
               </div>
@@ -132,10 +151,10 @@ export default function StudentHome() {
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[
-          { label: 'Registered', value: myEnrollments.length, color: 'text-primary', bg: 'bg-sky-50 border-sky-200' },
-          { label: 'Upcoming', value: upcoming.length, color: 'text-amber-600', bg: 'bg-amber-50 border-amber-200' },
-          { label: 'Completed', value: completed.length, color: 'text-ok', bg: 'bg-green-50 border-green-200' },
-          { label: 'Available', value: classes.filter(c => c.date >= today && c.enrolled < c.seats).length, color: 'text-violet-600', bg: 'bg-violet-50 border-violet-200' },
+          { label: 'Registered',  value: registered.length,                color: 'text-primary',    bg: 'bg-sky-50 border-sky-200' },
+          { label: 'Upcoming',    value: upcomingUnregistered.length,       color: 'text-amber-600',  bg: 'bg-amber-50 border-amber-200' },
+          { label: 'Completed',   value: completed.length,                  color: 'text-ok',         bg: 'bg-green-50 border-green-200' },
+          { label: 'Available',   value: upcomingUnregistered.filter(c => c.enrolled < c.seats).length, color: 'text-violet-600', bg: 'bg-violet-50 border-violet-200' },
         ].map(s => (
           <div key={s.label} className={`${s.bg} border rounded-2xl p-5 text-center`}>
             <p className={`text-3xl font-extrabold ${s.color}`}>{s.value}</p>
@@ -193,26 +212,25 @@ export default function StudentHome() {
       </div>
 
       {/* My upcoming classes quick view */}
-      {upcoming.length > 0 && (
+      {registered.length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-bold text-ink">🗓 My Upcoming Classes</h2>
             <Link to="/student/myclasses" className="text-primary text-sm font-bold hover:underline">See all →</Link>
           </div>
           <div className="space-y-3">
-            {upcoming.slice(0, 3).map(e => (
+            {registered.slice(0, 3).map(e => (
               <div key={e.id} className="bg-white border border-rim rounded-xl px-5 py-4 flex items-center justify-between gap-4 shadow-sm">
                 <div>
                   <span className="inline-block bg-sky-50 text-primary text-[10px] font-bold px-2 py-0.5 rounded-full border border-sky-200 mb-1">{e.classSubject}</span>
                   <p className="font-bold text-ink text-sm">{e.classTitle}</p>
                   <p className="text-xs text-dim mt-0.5">{e.classDate} · {e.classTime} · {e.conductor}</p>
                 </div>
-                {e.classMeetingLink && (
-                  <a href={e.classMeetingLink} target="_blank" rel="noreferrer"
-                    className="shrink-0 text-xs bg-primary text-white font-bold px-4 py-2 rounded-xl hover:bg-primary-dark transition-all shadow-sm">
-                    Join →
-                  </a>
-                )}
+                {/* Meeting links are not stored here — they were emailed at registration */}
+                <Link to={`/class/${e.classId}`}
+                  className="shrink-0 text-xs border border-primary text-primary font-bold px-4 py-2 rounded-xl hover:bg-sky-50 transition-all">
+                  Details
+                </Link>
               </div>
             ))}
           </div>

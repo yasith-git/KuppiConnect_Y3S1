@@ -28,9 +28,13 @@ function validate(form) {
   else if (Number(form.seats) < 1)e.seats       = 'Must be at least 1.';
   if (form.fee === '' || form.fee === undefined) e.fee = 'Fee is required (enter 0 if free).';
   else if (Number(form.fee) < 0)  e.fee         = 'Fee cannot be negative.';
-  if (!form.meetingLink.trim())   e.meetingLink = 'Meeting link is required.';
-  else if (!isValidUrl(form.meetingLink))
-                                  e.meetingLink = 'Enter a valid URL (https://...).';
+  if (form.classType === 'online') {
+    if (!form.meetingLink.trim())  e.meetingLink = 'Meeting link is required.';
+    else if (!isValidUrl(form.meetingLink))
+                                   e.meetingLink = 'Enter a valid URL (https://...).';
+  } else {
+    if (!form.location.trim())     e.location    = 'Venue / location is required.';
+  }
   if (!form.description.trim())   e.description = 'Description is required.';
   return e;
 }
@@ -45,12 +49,15 @@ export default function EditClass() {
   const { classes, updateClass } = useClasses();
   const navigate = useNavigate();
 
-  const cls = classes.find(c => c.id === Number(id));
+  // MongoDB _id is a string
+  const cls = classes.find(c => c.id === id || c._id === id);
 
   const [form, setForm] = useState(null);
   const [errors, setErrors] = useState({});
   const [touched, setTouched] = useState({});
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [apiError, setApiError] = useState('');
 
   const tomorrow = (() => {
     const d = new Date(); d.setDate(d.getDate() + 1);
@@ -59,6 +66,9 @@ export default function EditClass() {
 
   useEffect(() => {
     if (cls) {
+      // Detect classType from data: if location has non-URL text → physical
+      const hasPhysicalLocation = cls.location && !cls.location.startsWith('http');
+      const inferredType = cls.classType ?? (hasPhysicalLocation ? 'physical' : 'online');
       setForm({
         title:       cls.title ?? '',
         subject:     cls.subject ?? '',
@@ -66,7 +76,9 @@ export default function EditClass() {
         time:        cls.time ?? '',
         seats:       cls.seats?.toString() ?? '',
         fee:         cls.fee?.toString() ?? '0',
-        meetingLink: cls.meetingLink ?? cls.location ?? '',
+        classType:   inferredType,
+        meetingLink: inferredType === 'online' ? (cls.meetingLink ?? cls.location ?? '') : '',
+        location:    inferredType === 'physical' ? (cls.location ?? '') : '',
         duration:    cls.duration ?? '',
         description: cls.description ?? '',
       });
@@ -110,16 +122,24 @@ export default function EditClass() {
     setErrors(prev => ({ ...prev, [name]: e[name] || '' }));
   }
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
     const allTouched = Object.fromEntries(Object.keys(form).map(k => [k, true]));
     setTouched(allTouched);
     const errs = validate(form);
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
 
-    updateClass(Number(id), form);
-    setSaved(true);
-    setTimeout(() => navigate('/conductor/classes'), 1400);
+    setSaving(true);
+    setApiError('');
+    try {
+      await updateClass(id, form);
+      setSaved(true);
+      setTimeout(() => navigate('/conductor/classes'), 1400);
+    } catch (err) {
+      setApiError(err.message || 'Failed to save changes. Please try again.');
+    } finally {
+      setSaving(false);
+    }
   }
 
   if (saved) {
@@ -211,13 +231,68 @@ export default function EditClass() {
           <div className="p-6">
             <h2 className="font-bold text-ink text-sm uppercase tracking-wide mb-5">Session Details</h2>
             <div className="space-y-5">
+
+              {/* Class Type toggle */}
               <div>
-                <label className="block text-sm font-semibold text-ink mb-1.5">Meeting Link <span className="text-err">*</span></label>
-                <input type="url" value={form.meetingLink}
-                  onChange={e => patch('meetingLink', e.target.value)} onBlur={() => handleBlur('meetingLink')}
-                  className={inputCls('meetingLink')} />
-                <FieldError msg={errors.meetingLink} />
+                <label className="block text-sm font-semibold text-ink mb-2">
+                  Class Type <span className="text-err">*</span>
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { value: 'online',   icon: '🌐', label: 'Online',   desc: 'Zoom, Meet, etc.' },
+                    { value: 'physical', icon: '🏫', label: 'Physical', desc: 'In-person venue'   },
+                  ].map(opt => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => patch('classType', opt.value)}
+                      className={`flex items-center gap-3 p-4 rounded-xl border-2 text-left transition-all ${
+                        form.classType === opt.value
+                          ? 'border-primary bg-sky-50 text-primary'
+                          : 'border-slate-200 text-sub hover:border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span className="text-xl">{opt.icon}</span>
+                      <div>
+                        <p className="font-bold text-sm leading-none mb-0.5">{opt.label}</p>
+                        <p className="text-xs opacity-70">{opt.desc}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
+
+              {/* Online: meeting link */}
+              {form.classType === 'online' && (
+                <div>
+                  <label className="block text-sm font-semibold text-ink mb-1.5">
+                    Meeting Link <span className="text-err">*</span>
+                  </label>
+                  <input type="url" value={form.meetingLink}
+                    onChange={e => patch('meetingLink', e.target.value)} onBlur={() => handleBlur('meetingLink')}
+                    placeholder="https://zoom.us/j/... or https://meet.google.com/..."
+                    className={inputCls('meetingLink')} />
+                  <FieldError msg={errors.meetingLink} />
+                  <p className="text-dim text-xs mt-1.5 flex items-center gap-1">
+                    🔒 The link will be shared with registered students via email only.
+                  </p>
+                </div>
+              )}
+
+              {/* Physical: venue */}
+              {form.classType === 'physical' && (
+                <div>
+                  <label className="block text-sm font-semibold text-ink mb-1.5">
+                    Venue / Location <span className="text-err">*</span>
+                  </label>
+                  <input type="text" value={form.location}
+                    onChange={e => patch('location', e.target.value)} onBlur={() => handleBlur('location')}
+                    placeholder="e.g. Lecture Hall 3, Faculty of Science"
+                    className={inputCls('location')} />
+                  <FieldError msg={errors.location} />
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-semibold text-ink mb-1.5">Description <span className="text-err">*</span></label>
                 <textarea value={form.description} rows={5}
@@ -229,15 +304,21 @@ export default function EditClass() {
           </div>
         </div>
 
-        <div className="flex gap-3 mt-6">
-          <button type="submit"
-            className="flex-1 bg-primary hover:bg-primary-dark text-white py-3.5 rounded-xl font-bold text-sm transition-all shadow-sm hover:shadow-[0_4px_14px_rgba(14,165,233,0.35)]">
-            Save Changes
-          </button>
-          <button type="button" onClick={() => navigate('/conductor/classes')}
-            className="px-8 py-3.5 border border-slate-200 text-sub rounded-xl text-sm font-semibold hover:bg-slate-50 transition-all">
-            Cancel
-          </button>
+        <div className="mt-6 space-y-3">
+          {apiError && (
+            <div className="bg-red-50 border border-red-200 text-err text-sm rounded-xl px-4 py-3">⚠ {apiError}</div>
+          )}
+          <div className="flex gap-3">
+            <button type="submit" disabled={saving}
+              className="flex-1 bg-primary hover:bg-primary-dark text-white py-3.5 rounded-xl font-bold text-sm transition-all shadow-sm hover:shadow-[0_4px_14px_rgba(14,165,233,0.35)] disabled:opacity-70 flex items-center justify-center gap-2">
+              {saving && <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+              {saving ? 'Saving…' : 'Save Changes'}
+            </button>
+            <button type="button" onClick={() => navigate('/conductor/classes')}
+              className="px-8 py-3.5 border border-slate-200 text-sub rounded-xl text-sm font-semibold hover:bg-slate-50 transition-all">
+              Cancel
+            </button>
+          </div>
         </div>
       </form>
     </div>

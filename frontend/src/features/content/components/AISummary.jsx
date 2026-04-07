@@ -1,74 +1,36 @@
-import { useState } from 'react';
-
-/* ── Template-based AI comment analyser ── */
-function analyseComments(comments) {
-  if (!comments?.length) return null;
-
-  const flatTexts = [];
-  function collect(list) {
-    list.forEach(c => {
-      if (c.text) flatTexts.push(c.text.toLowerCase());
-      if (c.replies?.length) collect(c.replies);
-    });
-  }
-  collect(comments);
-
-  const joined = flatTexts.join(' ');
-  const total  = flatTexts.length;
-
-  /* Keyword scoring */
-  const POS = ['excellent', 'great', 'good', 'helpful', 'clear', 'best', 'amazing', 'wonderful', 'love', 'perfect',
-               'understand', 'easy', 'fantastic', 'awesome', 'brilliant', 'enjoyed', 'impressed', 'recommend'];
-  const NEG = ['difficult', 'confusing', 'hard', 'bad', 'poor', 'slow', 'boring', 'unclear', 'complicated',
-               'struggle', 'lost', 'confused', 'disappointed', 'waste', 'rushed'];
-  const SUG = ['suggest', 'improve', 'should', 'could', 'maybe', 'hope', 'wish', 'better', 'more examples'];
-
-  let pos = 0, neg = 0, sug = 0;
-  POS.forEach(w => { if (joined.includes(w)) pos++; });
-  NEG.forEach(w => { if (joined.includes(w)) neg++; });
-  SUG.forEach(w => { if (joined.includes(w)) sug++; });
-
-  const total_signals = pos + neg + sug || 1;
-  const posPct = Math.round((pos / total_signals) * 100);
-  const negPct = Math.round((neg / total_signals) * 100);
-  const sugPct = Math.max(0, 100 - posPct - negPct);
-
-  /* Sentiment label */
-  let label, icon, color;
-  if (posPct >= 60) { label = 'Very Positive'; icon = '🌟'; color = 'text-ok'; }
-  else if (posPct >= 40) { label = 'Mostly Positive'; icon = '👍'; color = 'text-ok'; }
-  else if (neg >= pos) { label = 'Needs Improvement'; icon = '⚠️'; color = 'text-err'; }
-  else { label = 'Mixed Feedback'; icon = '🤔'; color = 'text-amber-600'; }
-
-  /* Detect key themes */
-  const themes = [];
-  if (joined.match(/explain|clear|understand/)) themes.push('Explanation Quality');
-  if (joined.match(/pace|speed|slow|fast/)) themes.push('Teaching Pace');
-  if (joined.match(/content|material|topic|syllabus/)) themes.push('Content Depth');
-  if (joined.match(/example|practice|problem|exercise/)) themes.push('Practical Examples');
-  if (joined.match(/time|duration|long|short/)) themes.push('Session Duration');
-  if (joined.match(/helpful|useful|informative/)) themes.push('Helpfulness');
-  if (joined.match(/interact|engage|question|doubt/)) themes.push('Student Interaction');
-  if (joined.match(/note|slide|pdf|material/)) themes.push('Study Materials');
-  if (themes.length === 0) themes.push('General Experience', 'Teaching Quality');
-
-  /* Summary paragraph */
-  const summary = posPct >= 40
-    ? `Students are responding positively to this class. The majority of comments reflect satisfaction with the teaching experience and content delivery.${sug > 0 ? ' A few students also offered constructive suggestions for further improvement.' : ''} Overall this class is well-regarded within the student community, which speaks to the conductor's effectiveness.`
-    : `Student feedback for this class shows mixed or critical sentiments. Some students appreciate the session content, while others have highlighted areas that need attention.${sug > 0 ? ' Several constructive suggestions were noted and may be worth reviewing.' : ''} The conductor may benefit from addressing the specific concerns raised in the discussion below.`;
-
-  return { total, posPct, negPct, sugPct, label, icon, color, themes, summary };
-}
+import { useState, useEffect } from 'react';
+import { useAuth } from '../../auth/AuthContext';
+import { api } from '../../../services/api';
 
 export default function AISummary({ classId }) {
-  const [result, setResult]       = useState(null);
-  const [loading, setLoading]     = useState(false);
-  const [generated, setGenerated] = useState(false);
-  const [progress, setProgress]   = useState(0);
+  const { user } = useAuth();
+  const [result, setResult]             = useState(null);
+  const [loading, setLoading]           = useState(false);
+  const [generated, setGenerated]       = useState(false);
+  const [progress, setProgress]         = useState(0);
+  const [cachedAt, setCachedAt]         = useState(null);
+  const [generateError, setGenerateError] = useState('');
 
-  function generate() {
+  /* On mount: load any previously saved summary from DB */
+  useEffect(() => {
+    if (!classId) return;
+    api.get(`/content/summary/${classId}`)
+      .then(res => {
+        const d = res.data;
+        if (d?.cached && d.total > 0) {
+          setResult(d);
+          setGenerated(true);
+          if (d.aiSummaryAt) setCachedAt(new Date(d.aiSummaryAt));
+        }
+      })
+      .catch(() => {}); // silent — no cached summary yet
+  }, [classId]);
+
+  async function generate() {
+    if (!user) { setGenerateError('auth'); return; }
     setLoading(true);
     setProgress(0);
+    setGenerateError('');
 
     /* Simulate progressive loading */
     const ticks = [20, 45, 70, 90, 100];
@@ -76,20 +38,25 @@ export default function AISummary({ classId }) {
       setTimeout(() => setProgress(val), (i + 1) * 320);
     });
 
-    setTimeout(() => {
-      try {
-        const raw  = localStorage.getItem(`kuppi_comments_${classId}`);
-        const data = raw ? JSON.parse(raw) : [];
-        setResult(analyseComments(data));
-      } catch {
-        setResult(null);
-      }
+    /* POST — runs fresh analysis and persists to DB */
+    const [apiResult] = await Promise.allSettled([
+      api.post(`/content/summary/${classId}`),
+      new Promise(resolve => setTimeout(resolve, 1900)),
+    ]);
+    if (apiResult.status === 'rejected') {
+      const code = apiResult.reason?.statusCode;
+      setGenerateError(code === 401 ? 'auth' : (apiResult.reason?.message || 'Generation failed. Please try again.'));
       setLoading(false);
-      setGenerated(true);
-    }, 1900);
+      return;
+    }
+    const data = apiResult.value?.data;
+    setResult(data?.total > 0 ? data : null);
+    if (data?.aiSummaryAt) setCachedAt(new Date(data.aiSummaryAt));
+    setLoading(false);
+    setGenerated(true);
   }
 
-  function reset() { setGenerated(false); setResult(null); setProgress(0); }
+  function reset() { setGenerated(false); setResult(null); setProgress(0); setCachedAt(null); setGenerateError(''); }
 
   return (
     <div className="bg-white border border-slate-100 rounded-2xl p-6 sm:p-7 shadow-sm">
@@ -114,12 +81,26 @@ export default function AISummary({ classId }) {
           <p className="text-xs text-dim mb-7 max-w-xs">
             Click below to get an AI-generated summary of all discussion comments for this class.
           </p>
-          <button
-            onClick={generate}
-            className="px-8 py-3 bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700 text-white font-bold rounded-xl text-sm transition-all shadow-md hover:shadow-[0_6px_20px_rgba(139,92,246,0.4)] hover:-translate-y-0.5"
-          >
-            ✨ Generate AI Summary
-          </button>
+          {generateError === 'auth' ? (
+            <div className="space-y-2">
+              <p className="text-sm text-dim">
+                <a href="/login" className="text-primary font-semibold hover:underline">Sign in</a>
+                {' '}to generate and save the AI analysis.
+              </p>
+            </div>
+          ) : (
+            <>
+              {generateError && (
+                <p className="text-xs text-err mb-3">⚠ {generateError}</p>
+              )}
+              <button
+                onClick={generate}
+                className="px-8 py-3 bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700 text-white font-bold rounded-xl text-sm transition-all shadow-md hover:shadow-[0_6px_20px_rgba(139,92,246,0.4)] hover:-translate-y-0.5"
+              >
+                ✨ Generate AI Summary
+              </button>
+            </>
+          )}
         </div>
       )}
 
@@ -168,7 +149,7 @@ export default function AISummary({ classId }) {
           <p className="text-4xl mb-3">💬</p>
           <p className="text-sm font-semibold text-ink">No comments to analyse yet.</p>
           <p className="text-xs mt-1">Once students post comments, the AI can generate a summary.</p>
-          <button onClick={reset} className="mt-4 text-xs text-primary hover:underline font-medium">
+          <button onClick={generate} className="mt-4 text-xs text-primary hover:underline font-medium">
             ↺ Try again
           </button>
         </div>
@@ -245,10 +226,16 @@ export default function AISummary({ classId }) {
             This summary is AI-generated based on keyword analysis of student comments. Results are indicative only.
           </p>
 
-          <div className="text-center">
+          <div className="flex flex-col items-center gap-1 text-center">
+            {cachedAt && (
+              <p className="text-[11px] text-dim">
+                Last generated {cachedAt.toLocaleDateString()} at {cachedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </p>
+            )}
             <button
-              onClick={reset}
-              className="text-xs text-dim hover:text-primary transition-colors font-medium"
+              onClick={generate}
+              disabled={loading}
+              className="text-xs text-primary hover:text-primary-dark transition-colors font-medium disabled:opacity-50"
             >
               ↺ Regenerate analysis
             </button>
