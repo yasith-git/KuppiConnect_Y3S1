@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const connectDB = require('./src/config/db');
+const { runMigrations } = require('./src/config/migrate');
 const errorHandler = require('./src/middleware/errorHandler');
 const { startReminderScheduler } = require('./src/modules/registration/reminderScheduler');
 const { verifyConnection } = require('./src/utils/mailer');
@@ -15,8 +16,9 @@ const contentRoutes = require('./src/modules/content/routes');
 
 const app = express();
 
-// Connect to MongoDB, then start background schedulers and verify SMTP
-connectDB().then(() => {
+// Connect to MongoDB, run migrations, then start background schedulers and verify SMTP
+connectDB().then(async () => {
+  await runMigrations();
   verifyConnection();
   startReminderScheduler();
 });
