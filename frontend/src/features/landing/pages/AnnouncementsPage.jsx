@@ -61,7 +61,7 @@ function AnnouncementsPage() {
             >
               {a.image && (
                 <img
-                  src={`${BASE_URL}/${a.image}`}
+                  src={a.image.startsWith('data:') || a.image.startsWith('http') ? a.image : `${BASE_URL}/${a.image}`}
                   alt={a.title}
                   className="w-full h-40 object-cover"
                 />

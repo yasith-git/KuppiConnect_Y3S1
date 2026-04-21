@@ -40,17 +40,10 @@ const upload = multer({
 });
 
 /* ── Announcement image upload (images only) ──────────────────────── */
-const announcementStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadPath = 'uploads/announcements';
-    ensureDir(uploadPath);
-    cb(null, uploadPath);
-  },
-  filename: (req, file, cb) => {
-    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `${unique}${path.extname(file.originalname)}`);
-  },
-});
+// Uses memory storage so the image buffer can be converted to a base64
+// data-URL and stored directly in MongoDB.  This makes images accessible
+// to every machine sharing the same database — no shared file-system needed.
+const announcementStorage = multer.memoryStorage();
 
 const imageFilter = (req, file, cb) => {
   const allowed = /png|jpg|jpeg|webp/;

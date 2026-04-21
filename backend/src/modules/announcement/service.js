@@ -139,10 +139,14 @@ const createLandingAnnouncement = async (conductorId, data, imageFile) => {
   if (isNaN(end.getTime())) throw Object.assign(new Error('Invalid end date'), { statusCode: 400 });
   if (end <= start) throw Object.assign(new Error('End date must be after start date'), { statusCode: 400 });
 
+  const imageDataUrl = imageFile
+    ? `data:${imageFile.mimetype};base64,${imageFile.buffer.toString('base64')}`
+    : null;
+
   const announcement = await LandingAnnouncement.create({
     title: title.trim(),
     description: description.trim(),
-    image: imageFile ? imageFile.path.replace(/\\/g, '/') : null,
+    image: imageDataUrl,
     startDate: start,
     endDate: end,
     conductor: conductorId,
@@ -227,7 +231,9 @@ const updateLandingAnnouncement = async (id, conductorId, data, imageFile) => {
 
   if (title !== undefined) announcement.title = title.trim();
   if (description !== undefined) announcement.description = description.trim();
-  if (imageFile) announcement.image = imageFile.path.replace(/\\/g, '/');
+  if (imageFile) {
+    announcement.image = `data:${imageFile.mimetype};base64,${imageFile.buffer.toString('base64')}`;
+  }
 
   if (startDate !== undefined) {
     const start = new Date(startDate);

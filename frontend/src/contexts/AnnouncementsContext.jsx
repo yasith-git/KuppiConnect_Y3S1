@@ -16,7 +16,7 @@ function mapAnn(a) {
     body:        a.description,
     // Prepend server origin only when the value is a bare relative path
     image:       a.image
-      ? (a.image.startsWith('http') ? a.image : `${UPLOADS}/${a.image}`)
+      ? (a.image.startsWith('http') || a.image.startsWith('data:') ? a.image : `${UPLOADS}/${a.image}`)
       : null,
   };
 }

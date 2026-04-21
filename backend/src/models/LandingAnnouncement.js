@@ -25,7 +25,7 @@ const landingAnnouncementSchema = new mongoose.Schema(
     },
     image: {
       type: String,
-      default: null, // relative URL path served by /uploads
+      default: null, // base64 data-URL (data:image/...;base64,...) stored directly in MongoDB
     },
     startDate: {
       type: Date,
